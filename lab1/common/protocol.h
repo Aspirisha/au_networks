@@ -22,7 +22,7 @@ enum MessageType : uint8_t
     DEL
 };
 
-enum ServerErrorCode {
+enum ServerErrorCode : uint8_t {
     SUCCESS,
     INVALID_OPERATION,
     INVALID_PASSWORD,
@@ -30,20 +30,45 @@ enum ServerErrorCode {
 };
 
 struct LengthPrefixedMessage {
-    const uint32_t length;
-    const void *length_prefixed_data;
+    LengthPrefixedMessage() : length(0) {}
 
-    static constexpr size_t length_size = sizeof(uint32_t);
+    LengthPrefixedMessage(uint64_t length, std::vector<uint8_t> &&length_prefixed_data) :
+        length(length), length_prefixed_data(std::move(length_prefixed_data)) {}
+
+    std::vector<uint8_t>::const_iterator body_begin() const;
+
+    const uint64_t length;
+    const std::vector<uint8_t> length_prefixed_data;
+
+    static constexpr size_t length_size = sizeof(uint64_t);
 };
 
 struct Message {
     virtual ~Message() {}
     virtual LengthPrefixedMessage serialize() = 0;
 
-    static LengthPrefixedMessage serialize_string();
+    static void serialize_uint32_t(uint32_t s, std::vector<uint8_t> &data);
+    static void serialize_uint16_t(uint16_t s, std::vector<uint8_t> &data);
+    static void serialize_uint8_t(uint8_t s, std::vector<uint8_t> &data);
+    static void serialize_uint64_t(uint64_t s, std::vector<uint8_t> &data);
+    static void serialize_string_uint16(const std::string &s, std::vector<uint8_t> &data);
+
+    static uint32_t deserialize_uint32_t(std::vector<uint8_t>::const_iterator &iter);
+    static uint16_t deserialize_uint16_t(std::vector<uint8_t>::const_iterator &iter);
+    static uint8_t deserialize_uint8_t(std::vector<uint8_t>::const_iterator &iter);
+    static uint64_t deserialize_uint64_t(std::vector<uint8_t>::const_iterator &iter);
+    static std::string deserialize_string_uint16(
+            std::vector<uint8_t>::const_iterator &iter);
     virtual MessageType type() const = 0;
+
+    static constexpr size_t header_length = LengthPrefixedMessage::length_size + sizeof(MessageType);
 protected:
-    virtual uint32_t evaluate_total_serialized_size() const = 0;
+    /**
+     * Evaluates serialize size without taking header into account
+     * Header = [body length (uint64_t), message type (uint8_t)]
+     */
+    virtual uint64_t evaluate_body_serialized_size() const = 0;
+    virtual std::pair<std::vector<uint8_t>, uint64_t> serialize_header() const;
 };
 
 struct ClientMessage : public Message {
@@ -61,7 +86,7 @@ struct ConnectMessage : public ClientMessage {
     std::string directory;
     std::string password;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct CdMessage : public ClientMessage {
@@ -72,7 +97,7 @@ struct CdMessage : public ClientMessage {
 
     std::string directory;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct LsMessage : public ClientMessage {
@@ -81,7 +106,7 @@ struct LsMessage : public ClientMessage {
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct GetMessage : public ClientMessage {
@@ -92,19 +117,19 @@ struct GetMessage : public ClientMessage {
 
     std::string src_file;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct PutMessage : public ClientMessage {
-    PutMessage(const std::string &dst_file, LengthPrefixedMessage file_data);
+    PutMessage(const std::string &dst_file, const std::vector<uint8_t>& file_data);
     PutMessage(LengthPrefixedMessage serialized);
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 
     std::string dst_file;
-    LengthPrefixedMessage file_data;
+    std::vector<uint8_t> file_data;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct DelMessage : public ClientMessage {
@@ -115,12 +140,18 @@ struct DelMessage : public ClientMessage {
 
     std::string filename;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct ServerMessage : public Message {
+    ServerMessage(ServerErrorCode error);
+    ServerMessage(LengthPrefixedMessage msg);
+
     static std::shared_ptr<ServerMessage> deserialize(LengthPrefixedMessage msg);
     ServerErrorCode error;
+
+protected:
+    virtual std::pair<std::vector<uint8_t>, uint64_t> serialize_header() const;
 };
 
 struct ConnectResponse : public ServerMessage {
@@ -129,7 +160,7 @@ struct ConnectResponse : public ServerMessage {
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct CdResponse : public ServerMessage {
@@ -140,7 +171,7 @@ struct CdResponse : public ServerMessage {
 
     std::string new_directory;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct LsResponse : public ServerMessage {
@@ -151,18 +182,18 @@ struct LsResponse : public ServerMessage {
 
     std::vector<std::string> files;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct GetResponse : public ServerMessage {
-    GetResponse(ServerErrorCode error, LengthPrefixedMessage file_data);
+    GetResponse(ServerErrorCode error, const std::vector<uint8_t>& file_data);
     GetResponse(LengthPrefixedMessage serialized);
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 
-    LengthPrefixedMessage file_data;
+    std::vector<uint8_t> file_data;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct PutResponse : public ServerMessage {
@@ -171,7 +202,7 @@ struct PutResponse : public ServerMessage {
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 struct DelResponse : public ServerMessage {
@@ -180,7 +211,7 @@ struct DelResponse : public ServerMessage {
     LengthPrefixedMessage serialize() override;
     MessageType type() const override;
 protected:
-    uint32_t evaluate_total_serialized_size() const override;
+    uint64_t evaluate_body_serialized_size() const override;
 };
 
 }
