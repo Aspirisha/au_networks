@@ -57,5 +57,6 @@ int main(int argc, const char **argv) {
         threads.push_back(thread);
     }
 
+    Server::save_clients_info();
     return 0;
 }

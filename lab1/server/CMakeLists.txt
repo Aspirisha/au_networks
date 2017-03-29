@@ -1,4 +1,4 @@
-find_package(Boost COMPONENTS filesystem system)
+find_package(Boost REQUIRED COMPONENTS filesystem system)
 
 add_library(libserver server.cpp)
 set_target_properties(libserver PROPERTIES COMPILE_FLAGS "-m64" LINK_FLAGS "-m64")

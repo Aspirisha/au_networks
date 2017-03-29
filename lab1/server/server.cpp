@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include "server.h"
 
 namespace fs = boost::filesystem;
@@ -11,7 +12,9 @@ namespace fs = boost::filesystem;
 std::mutex Server::users_mutex;
 std::list<UserInfo> Server::users;
 boost::filesystem::path Server::root_directory;
-
+boost::filesystem::path Server::users_info_file;
+const int Server::max_login_length = 30;
+const int Server::max_password_length = 15;
 
 void Server::process_client_message() {
     std::shared_ptr<proto::ClientMessage> msg = proto::ClientMessage::receive_message(client);
@@ -41,32 +44,49 @@ void Server::process_client_message() {
 }
 
 void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
+    if (is_connected) {
+        proto::ConnectResponse(proto::CLIENT_ALREADY_CONNECTED).send(*client);
+    }
+
     bool found = false;
     bool password_match = false;
+    std::regex name_regex("[a-z]([a-z0-9]*)");
+    if (!std::regex_match(msg->login, name_regex) || msg->login.size() > max_login_length) {
+        proto::ConnectResponse(proto::INVALID_LOGIN).send(*client);
+        return;
+    }
+
+    std::regex password_regex("([a-z0-9]+)");
+    if (!std::regex_match(msg->password, password_regex) || msg->password.size() > max_password_length) {
+        proto::ConnectResponse(proto::INVALID_PASSWORD).send(*client);
+        return;
+    }
+
     users_mutex.lock();
     for (auto &user: users) {
-        if (user.login == msg->directory) {
+        if (user.login == msg->login) {
             found = true;
             password_match = user.password == msg->password;
             break;
         }
     }
     if (!found) {
-        users.push_back(UserInfo(msg->directory, msg->password));
+        users.push_back(UserInfo(msg->login, msg->password));
     }
     users_mutex.unlock();
 
     if (!found) {
         proto::ConnectResponse(proto::SUCCESS).send(*client);
     } else if (!password_match) {
-        proto::ConnectResponse(proto::INVALID_PASSWORD).send(*client);
+        proto::ConnectResponse(proto::WRONG_PASSWORD).send(*client);
         return;
     } else {
         proto::ConnectResponse(proto::SUCCESS).send(*client);
     }
 
-    fs::create_directories(root_directory / msg->directory);
-    user_root_directory = current_directory = fs::canonical(root_directory / msg->directory);
+    fs::create_directories(root_directory / msg->login);
+    user_root_directory = current_directory = fs::canonical(root_directory / msg->login);
+    is_connected = true;
 }
 
 UserInfo::UserInfo(const std::string &login, const std::string &password) : login(login), password(password) { }
@@ -133,11 +153,39 @@ void Server::set_root_directory(const fs::path &root_dir) {
         fs::create_directories(root_dir);
     }
     root_directory = root_dir;
+    users_info_file = root_directory / "users.txt";
+    read_users_info();
 }
 
 Server::~Server() {
     delete client;
 }
+
+void Server::save_clients_info() {
+    users_mutex.lock();
+    std::ofstream out(users_info_file.string());
+    for (UserInfo &user: users) {
+        out << user.login << " " << user.password << std::endl;
+    }
+    users_mutex.unlock();
+}
+
+void Server::read_users_info() {
+    std::ifstream in(users_info_file.string());
+    users_mutex.lock();
+    users.clear();
+
+    std::string login, password;
+    while (in >> login >> password) {
+        users.push_back({login, password});
+        fs::create_directories(root_directory / login);
+    }
+    users_mutex.unlock();
+}
+
+
+
+
 
 
 

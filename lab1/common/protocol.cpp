@@ -48,7 +48,7 @@ std::shared_ptr<ClientMessage> ClientMessage::receive_message(stream_socket *s) 
 
 
 ConnectMessage::ConnectMessage(const std::string &directory,
-                                      const std::string &password) : directory(
+                                      const std::string &password) : login(
         directory), password(password) { }
 
 MessageType ConnectMessage::type() const {
@@ -56,14 +56,14 @@ MessageType ConnectMessage::type() const {
 }
 
 uint64_t ConnectMessage::evaluate_body_serialized_size() const {
-    return sizeof(uint16_t) + directory.size() + sizeof(uint16_t) +
+    return sizeof(uint16_t) + login.size() + sizeof(uint16_t) +
            password.size();
 }
 
 LengthPrefixedMessage ConnectMessage::serialize() const {
     auto data = serialize_header();
 
-    serialize_string_uint16(directory, data.first);
+    serialize_string_uint16(login, data.first);
     serialize_string_uint16(password, data.first);
 
     return LengthPrefixedMessage(data.second, std::move(data.first));
@@ -72,7 +72,7 @@ LengthPrefixedMessage ConnectMessage::serialize() const {
 ConnectMessage::ConnectMessage(LengthPrefixedMessage serialized) {
     auto iter = std::next(serialized.length_prefixed_data.begin(),
                           Message::header_length);
-    directory = deserialize_string_uint16(iter);
+    login = deserialize_string_uint16(iter);
     password = deserialize_string_uint16(iter);
 }
 

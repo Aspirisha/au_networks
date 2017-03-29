@@ -28,6 +28,8 @@ enum ServerErrorCode : uint8_t {
     SUCCESS,
     INVALID_OPERATION,
     INVALID_PASSWORD,
+    INVALID_LOGIN,
+    WRONG_PASSWORD,
     CLIENT_ALREADY_CONNECTED
 };
 
@@ -89,7 +91,7 @@ struct ConnectMessage : public ClientMessage {
     LengthPrefixedMessage serialize() const override;
     MessageType type() const override;
 
-    std::string directory;
+    std::string login;
     std::string password;
 protected:
     uint64_t evaluate_body_serialized_size() const override;

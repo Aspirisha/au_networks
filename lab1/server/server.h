@@ -10,6 +10,7 @@
 #include <utility>
 #include "protocol.h"
 #include <boost/filesystem.hpp>
+#include <atomic>
 #include "tcp_socket.h"
 
 struct UserInfo {
@@ -29,6 +30,9 @@ public:
     void process_client_message();
 
     static void set_root_directory(const boost::filesystem::path &root_dir);
+    static void read_users_info();
+    static void save_clients_info();
+
 private:
     void process_connect(std::shared_ptr<proto::ConnectMessage> msg);
     //void process_disconnect(std::shared_ptr<proto::Dis> msg);
@@ -41,10 +45,15 @@ private:
     static std::mutex users_mutex;
     static std::list<UserInfo> users;
     static boost::filesystem::path root_directory;
+    static boost::filesystem::path users_info_file;
+    static const int max_login_length;
+    static const int max_password_length;
+
 
     stream_socket *client;
     boost::filesystem::path current_directory;
     boost::filesystem::path user_root_directory;
+    bool is_connected = false;
 };
 
 #endif //LAB1_SERVER_H
