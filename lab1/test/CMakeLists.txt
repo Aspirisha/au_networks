@@ -1,5 +1,5 @@
-set(SOURCE_FILES main.cpp test_simple.cpp)
+set(SOURCE_FILES main.cpp test_simple.cpp server_test.cpp)
 FIND_PACKAGE(GTest REQUIRED)
 add_executable(socktest ${SOURCE_FILES})
 target_include_directories(socktest PRIVATE ${GTEST_INCLUDE_DIRS})
-target_link_libraries(socktest common64 ${GTEST_BOTH_LIBRARIES} pthread)
+target_link_libraries(socktest libserver common64 ${GTEST_BOTH_LIBRARIES} pthread)

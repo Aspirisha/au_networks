@@ -4,6 +4,7 @@
 
 
 #include <netinet/in.h>
+#include <iostream>
 #include "protocol.h"
 
 namespace proto
@@ -12,7 +13,7 @@ namespace proto
 std::shared_ptr<ClientMessage> ClientMessage::deserialize(
         LengthPrefixedMessage msg) {
     MessageType type = MessageType(msg.length_prefixed_data[LengthPrefixedMessage::length_size]);
-    
+
     switch (type) {
         case CONNECT:
             return std::shared_ptr<ClientMessage>(new ConnectMessage(msg));
@@ -31,6 +32,20 @@ std::shared_ptr<ClientMessage> ClientMessage::deserialize(
     }
 }
 
+std::shared_ptr<ClientMessage> ClientMessage::receive_message(stream_socket *s) {
+    std::vector<uint8_t> data(proto::Message::header_length);
+    s->recv(data.data(), proto::Message::header_length);
+
+    auto iter = data.cbegin();
+    uint64_t len = proto::Message::deserialize_uint64_t(iter);
+
+    data.resize(proto::Message::header_length + len);
+    s->recv(data.data() + proto::Message::header_length, len);
+    proto::LengthPrefixedMessage lpmsg(len, std::move(data));
+
+    return proto::ClientMessage::deserialize(lpmsg);
+}
+
 
 ConnectMessage::ConnectMessage(const std::string &directory,
                                       const std::string &password) : directory(
@@ -45,12 +60,12 @@ uint64_t ConnectMessage::evaluate_body_serialized_size() const {
            password.size();
 }
 
-LengthPrefixedMessage ConnectMessage::serialize() {
+LengthPrefixedMessage ConnectMessage::serialize() const {
     auto data = serialize_header();
 
     serialize_string_uint16(directory, data.first);
     serialize_string_uint16(password, data.first);
-    
+
     return LengthPrefixedMessage(data.second, std::move(data.first));
 }
 
@@ -93,8 +108,8 @@ void Message::serialize_uint16_t(uint16_t s,
 
 uint16_t Message::deserialize_uint16_t(
         std::vector<uint8_t>::const_iterator &iter) {
-    uint16_t lo = *iter++;
     uint16_t hi = *iter++;
+    uint16_t lo = *iter++;
     
     return (hi << 8) + lo;
 }
@@ -121,7 +136,7 @@ uint64_t Message::deserialize_uint64_t(
 std::string Message::deserialize_string_uint16(
         std::vector<uint8_t>::const_iterator &iter) {
     uint16_t string_length = deserialize_uint16_t(iter);
-    
+
     std::string s(iter, std::next(iter, string_length));
     
     iter = std::next(iter, string_length);
@@ -147,6 +162,11 @@ std::pair<std::vector<uint8_t>, uint64_t> Message::serialize_header() const {
     return {data, length};
 }
 
+void Message::send(stream_socket &s) const {
+    proto::LengthPrefixedMessage raw = serialize();
+    s.send(raw.length_prefixed_data.data(), raw.body_length + header_length);
+}
+
 
 CdMessage::CdMessage(const std::string &directory) : directory(directory) { }
 
@@ -160,7 +180,7 @@ CdMessage::CdMessage(LengthPrefixedMessage serialized) {
     directory = deserialize_string_uint16(iter);
 }
 
-LengthPrefixedMessage CdMessage::serialize() {
+LengthPrefixedMessage CdMessage::serialize() const {
     auto data = serialize_header();
     serialize_string_uint16(directory, data.first);
     return LengthPrefixedMessage(data.second, std::move(data.first));
@@ -174,7 +194,7 @@ LsMessage::LsMessage() { }
 
 LsMessage::LsMessage(LengthPrefixedMessage serialized) { }
 
-LengthPrefixedMessage LsMessage::serialize() {
+LengthPrefixedMessage LsMessage::serialize() const {
     auto msg = serialize_header();
     return LengthPrefixedMessage(msg.second, std::move(msg.first));
 }
@@ -195,7 +215,7 @@ GetMessage::GetMessage(LengthPrefixedMessage serialized) {
     src_file = deserialize_string_uint16(iter);
 }
 
-LengthPrefixedMessage GetMessage::serialize() {
+LengthPrefixedMessage GetMessage::serialize() const {
     auto msg = serialize_header();
     serialize_string_uint16(src_file, msg.first);
 
@@ -222,7 +242,7 @@ MessageType PutMessage::type() const {
     return PUT;
 }
 
-LengthPrefixedMessage PutMessage::serialize() {
+LengthPrefixedMessage PutMessage::serialize() const {
     auto msg = serialize_header();
 
     serialize_string_uint16(dst_file, msg.first);
@@ -253,7 +273,7 @@ DelMessage::DelMessage(LengthPrefixedMessage serialized) {
     filename = deserialize_string_uint16(iter);
 }
 
-LengthPrefixedMessage DelMessage::serialize() {
+LengthPrefixedMessage DelMessage::serialize() const {
     auto msg = serialize_header();
     serialize_string_uint16(filename, msg.first);
     return LengthPrefixedMessage(msg.second, std::move(msg.first));
@@ -298,13 +318,27 @@ ServerMessage::ServerMessage(LengthPrefixedMessage serialized) {
     error = (ServerErrorCode) serialized.length_prefixed_data[Message::header_length];
 }
 
+std::shared_ptr<ServerMessage> ServerMessage::receive_message(stream_socket &s) {
+    std::vector<uint8_t> data(proto::Message::header_length);
+    s.recv(data.data(), proto::Message::header_length);
+
+    auto iter = data.cbegin();
+    uint64_t len = proto::Message::deserialize_uint64_t(iter);
+
+    data.resize(proto::Message::header_length + len);
+    s.recv(data.data() + proto::Message::header_length, len);
+    proto::LengthPrefixedMessage lpmsg(len, std::move(data));
+
+    return proto::ServerMessage::deserialize(lpmsg);
+}
+
 
 ConnectResponse::ConnectResponse(ServerErrorCode error) : ServerMessage(error) { }
 
 ConnectResponse::ConnectResponse(LengthPrefixedMessage serialized) :
         ServerMessage(serialized) { }
 
-LengthPrefixedMessage ConnectResponse::serialize() {
+LengthPrefixedMessage ConnectResponse::serialize() const {
     auto msg = serialize_header();
     return LengthPrefixedMessage(msg.second, std::move(msg.first));
 }
@@ -331,7 +365,7 @@ MessageType CdResponse::type() const {
     return CD;
 }
 
-LengthPrefixedMessage CdResponse::serialize() {
+LengthPrefixedMessage CdResponse::serialize() const {
     auto msg = serialize_header();
 
     serialize_string_uint16(new_directory, msg.first);
@@ -355,11 +389,11 @@ LsResponse::LsResponse(LengthPrefixedMessage serialized) : ServerMessage(seriali
     }
 }
 
-LengthPrefixedMessage LsResponse::serialize() {
+LengthPrefixedMessage LsResponse::serialize() const {
     auto msg = serialize_header();
 
     serialize_uint32_t(files.size(), msg.first);
-    for (std::string &f: files) {
+    for (const std::string &f: files) {
         serialize_string_uint16(f, msg.first);
     }
 
@@ -392,7 +426,7 @@ GetResponse::GetResponse(LengthPrefixedMessage serialized) : ServerMessage(seria
             iter, serialized.length_prefixed_data.end());
 }
 
-LengthPrefixedMessage GetResponse::serialize() {
+LengthPrefixedMessage GetResponse::serialize() const {
     auto msg = serialize_header();
 
     msg.first.insert(msg.first.end(), file_data.begin(),
@@ -413,7 +447,7 @@ PutResponse::PutResponse(ServerErrorCode error) : ServerMessage(error) { }
 
 PutResponse::PutResponse(LengthPrefixedMessage serialized) : ServerMessage(serialized) { }
 
-LengthPrefixedMessage PutResponse::serialize() {
+LengthPrefixedMessage PutResponse::serialize() const {
     auto msg = serialize_header();
 
     return LengthPrefixedMessage(msg.second, std::move(msg.first));
@@ -424,14 +458,14 @@ MessageType PutResponse::type() const {
 }
 
 uint64_t PutResponse::evaluate_body_serialized_size() const {
-    return 0;
+    return sizeof(uint8_t);
 }
 
 DelResponse::DelResponse(ServerErrorCode error) : ServerMessage(error) { }
 
 DelResponse::DelResponse(LengthPrefixedMessage serialized) : ServerMessage(serialized) { }
 
-LengthPrefixedMessage DelResponse::serialize() {
+LengthPrefixedMessage DelResponse::serialize() const {
     auto msg = serialize_header();
 
     return LengthPrefixedMessage(msg.second, std::move(msg.first));
@@ -442,7 +476,7 @@ MessageType DelResponse::type() const {
 }
 
 uint64_t DelResponse::evaluate_body_serialized_size() const {
-    return 0;
+    return sizeof(uint8_t);
 }
 
 

@@ -19,6 +19,7 @@ void *send_message(void *void_socket) {
 
     client->send(msg, strlen(msg) + 1);
 
+    delete client;
     return nullptr;
 }
 

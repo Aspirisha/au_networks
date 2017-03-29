@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <arpa/inet.h>
+#include <iostream>
 #include "tcp_socket.h"
 
 tcp_connection_socket::tcp_connection_socket(int socket_fd) : socket_fd(socket_fd) {
@@ -121,11 +122,16 @@ tcp_server_socket::tcp_server_socket(const char *addr, int port) {
         throw std::logic_error("Error creating socket");
     }
 
+    int reuse = 1;
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(int))) {
+        throw std::logic_error("Error setting SO_REUSEADDR");
+    }
     sockaddr_in serv_addr = init_address(addr, port);
 
     if (bind(socket_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
         throw std::logic_error("Error binding server socket");
     }
+
 
     listen(socket_fd, 5);
 }
