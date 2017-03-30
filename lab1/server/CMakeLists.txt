@@ -1,6 +1,6 @@
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
-add_library(libserver server.cpp)
+add_library(libserver server.cpp util.cpp)
 set_target_properties(libserver PROPERTIES COMPILE_FLAGS "-m64" LINK_FLAGS "-m64")
 
 target_include_directories(libserver PUBLIC ../common ${Boost_INCLUDE_DIRS})

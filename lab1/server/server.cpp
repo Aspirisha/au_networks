@@ -6,6 +6,7 @@
 #include <iostream>
 #include <regex>
 #include "server.h"
+#include "util.h"
 
 namespace fs = boost::filesystem;
 
@@ -105,17 +106,20 @@ void Server::process_cd(std::shared_ptr<proto::CdMessage> msg) {
     try {
         dest = fs::canonical(dest, current_directory);
     } catch (fs::filesystem_error &e) {
-        proto::CdResponse(proto::INVALID_OPERATION, current_directory.string()).send(*client);
+        dest = "/"/relative_to(user_root_directory, current_directory);
+        proto::CdResponse(proto::INVALID_OPERATION, dest.string()).send(*client);
         return;
     }
 
     const std::string &user_root = user_root_directory.string();
     if (dest.string().compare(0, user_root.size(), user_root)) {
-        proto::CdResponse(proto::INVALID_OPERATION, current_directory.string()).send(*client);
+        dest = "/"/relative_to(user_root_directory, current_directory);
+        proto::CdResponse(proto::INVALID_OPERATION, dest.string()).send(*client);
         return;
     }
 
     current_directory = dest;
+    dest = "/"/relative_to(user_root_directory, dest);
     proto::CdResponse(proto::SUCCESS, dest.string()).send(*client);
 }
 
@@ -148,7 +152,6 @@ void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
         } catch (fs::filesystem_error &e) {
             proto::PutResponse(proto::INVALID_OPERATION).send(*client);
         }
-
     }
 
     std::ofstream out(realpath.string(), std::ofstream::binary);
@@ -211,37 +214,8 @@ void Server::read_users_info() {
     users_mutex.unlock();
 }
 
-
-// taken from http://stackoverflow.com/questions/10167382/boostfilesystem-get-relative-path
-static fs::path relativeTo(fs::path from, fs::path to) {
-    // Start at the root path and while they are the same then do nothing then when they first
-    // diverge take the remainder of the two path and replace the entire from path with ".."
-    // segments.
-    fs::path::const_iterator fromIter = from.begin();
-    fs::path::const_iterator toIter = to.begin();
-
-    // Loop through both
-    while (fromIter != from.end() && toIter != to.end() && (*toIter) == (*fromIter)) {
-        ++toIter;
-        ++fromIter;
-    }
-
-    fs::path finalPath;
-    while (fromIter != from.end()) {
-        finalPath /= "..";
-        ++fromIter;
-    }
-
-    while (toIter != to.end()) {
-        finalPath /= *toIter;
-        ++toIter;
-    }
-
-    return finalPath;
-}
-
 void Server::process_pwd(std::shared_ptr<proto::PwdMessage> msg) {
-    fs::path rel = relativeTo(user_root_directory, current_directory);
+    fs::path rel = relative_to(user_root_directory, current_directory);
     auto abs = "/" / rel;
 
     proto::PwdResponse(proto::SUCCESS, abs.string()).send(*client);

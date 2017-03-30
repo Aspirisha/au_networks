@@ -4,9 +4,11 @@
 
 #include <iostream>
 #include <memory>
-#include "../common/tcp_socket.h"
-#include "../common/protocol.h"
+#include "tcp_socket.h"
+#include "protocol.h"
 #include "Client.h"
+
+void process_cd(Client &client);
 
 using namespace std;
 
@@ -25,6 +27,153 @@ void print_help() {
     cout << "\tcd <path> -- change current vfs directory\n";
     cout << "\tget <filename> <local file> -- download file from server and save it to <local filename>\n";
     cout << "\tput <local filename> <filename> -- upload <local filename> to server\n";
+}
+
+void process_connect(Client &client) {
+    string password;
+    string login;
+    cin >> login >> password;
+
+    try {
+        switch (client.connect(login, password)) {
+            case proto::SUCCESS:
+                cout << "Connected successfully\n";
+                break;
+            case proto::CLIENT_ALREADY_CONNECTED:
+                std::cerr << "already connected\n";
+                break;
+            case proto::WRONG_PASSWORD:
+                std::cerr << "wrong password\n";
+                break;
+            default:
+                break;
+        }
+    } catch (std::logic_error &e) {
+        cerr << "Error connecting to server\n";
+    }
+}
+
+void process_ls(Client &client) {
+    vector<string> files;
+    switch (client.ls(files)) {
+        case proto::INVALID_OPERATION:
+            std::cerr << "not connected\n";
+            break;
+        case proto::SUCCESS:
+            for (const string &s: files) {
+                cout << s << endl;
+            }
+            break;
+        default:
+            std::cerr << "server error\n";
+            break;
+    }
+}
+
+struct GetPutData {
+    GetPutData(Client &client) : client(client) {}
+
+    string file;
+    string local_file;
+    Client &client;
+};
+
+void print_greeting(Client &client) {
+    if (!client.connected()) {
+        cout << "> ";
+    } else {
+        cout << client.get_login() << "@" << client.get_ip() << ":" << client.get_cwd() << "$ ";
+    }
+    cout.flush();
+}
+
+void * async_put(void *data_raw) {
+    GetPutData *put_data = (GetPutData *) data_raw;
+
+    try {
+        switch (put_data->client.put(put_data->file, put_data->local_file)) {
+            case proto::SUCCESS:
+                cout << "File " << put_data->local_file << " uploaded succesfully\n";
+                break;
+            default:
+                cout << "error uploading file\n";
+                break;
+        }
+    } catch (std::logic_error &e) {
+        cout << "File doesn't exist\n";
+    }
+
+    print_greeting(put_data->client);
+    delete put_data;
+    return nullptr;
+}
+
+void * async_get(void *data_raw) {
+    GetPutData *put_data = (GetPutData *) data_raw;
+
+    try {
+        switch (put_data->client.get(put_data->file, put_data->local_file)) {
+            case proto::SUCCESS:
+                cout << "File " << put_data->local_file << " downloaded succesfully\n";
+                break;
+            default:
+                cout << "error downloading file\n";
+                break;
+        }
+    } catch (std::logic_error &e) {
+        cout << "File doesn't exist\n";
+    }
+
+    print_greeting(put_data->client);
+    delete put_data;
+    return nullptr;
+}
+
+void process_put(Client &client) {
+    GetPutData *data = new GetPutData(client);
+
+    cin >> data->local_file;
+    cin >> data->file;
+
+    pthread_t putter;
+    if (pthread_create(&putter, NULL, async_put, data)) {
+        cout << "Error creating put processing thread\n";
+    }
+}
+
+
+void process_get(Client &client) {
+    GetPutData *data = new GetPutData(client);
+
+    cin >> data->file;
+    cin >> data->local_file;
+    pthread_t getter;
+    if (pthread_create(&getter, NULL, async_get, data)) {
+        cout << "Error creating put processing thread\n";
+    }
+}
+
+void process_del(Client &client) {
+    string file;
+    cin >> file;
+
+    switch (client.del(file)) {
+        case proto::SUCCESS:
+            break;
+        default:
+            cout << "Error deleting file\n";
+    }
+}
+
+void process_pwd(Client &client) {
+    string cwd;
+    switch (client.pwd(cwd)) {
+        case proto::SUCCESS:
+            cout << cwd << endl;
+            break;
+        default:
+            cout << "not connected\n";
+    }
 }
 
 int main(int argc, char **argv) {
@@ -48,54 +197,27 @@ int main(int argc, char **argv) {
 
     Client client(ip, port);
     while (true) {
-        if (!client.connected()) {
-            cout << "> ";
-        } else {
-            cout << client.get_login() << "@" << ip << ":" << client.get_cwd() << "$ ";
-        }
+        print_greeting(client);
 
         string command;
         cin >> command;
 
         if (command == "connect") {
-            string password;
-            string login;
-            cin >> login >> password;
-
-            try {
-                switch (client.connect(login, password)) {
-                    case proto::SUCCESS:
-                        cout << "Connected successfully\n";
-                        break;
-                    case proto::CLIENT_ALREADY_CONNECTED:
-                        std::cerr << "already connected\n";
-                        break;
-                    case proto::WRONG_PASSWORD:
-                        std::cerr << "wrong password\n";
-                        break;
-                    default:
-                        break;
-                }
-            } catch (std::logic_error &e) {
-                cerr << "Error connecting to server\n";
-            }
+            process_connect(client);
         } else if (command == "exit") {
             break;
         } else if (command == "ls") {
-            vector<string> files;
-            switch (client.ls(files)) {
-                case proto::INVALID_OPERATION:
-                    std::cerr << "not connected\n";
-                    break;
-                case proto::SUCCESS:
-                    for (const string &s: files) {
-                        cout << s << endl;
-                    }
-                    break;
-                default:
-                    std::cerr << "server error\n";
-                    break;
-            };
+            process_ls(client);
+        } else if (command == "cd") {
+            process_cd(client);
+        } else if (command == "put") {
+            process_put(client);
+        } else if (command == "get") {
+            process_get(client);
+        } else if (command == "del") {
+            process_del(client);
+        } else if (command == "pwd") {
+            process_pwd(client);
         } else if (command == "help") {
             print_help();
         }
@@ -103,4 +225,22 @@ int main(int argc, char **argv) {
     }
 
     return 0;
+}
+
+void process_cd(Client &client) {
+    string directory;
+
+    cin >> directory;
+
+    try {
+        switch (client.cd(directory)) {
+            case proto::SUCCESS:
+                break;
+            default:
+                cout << "Directory doesn't exist\n";
+                break;
+        }
+    } catch (std::logic_error &e) {
+        cout << e.what() << endl;
+    }
 }

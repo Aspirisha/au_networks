@@ -6,20 +6,26 @@
 #define LAB1_CLIENT_H
 
 #include <string>
-#include <bits/unique_ptr.h>
-#include "../common/tcp_socket.h"
-#include "../common/protocol.h"
+#include <memory>
+#include "tcp_socket.h"
+#include "protocol.h"
 
 class Client {
 public:
     Client(const char* ip, int port);
     proto::ServerErrorCode connect(const std::string &login, const std::string &password);
     proto::ServerErrorCode ls(std::vector<std::string> &files);
+    proto::ServerErrorCode cd(const std::string &dir);
+    proto::ServerErrorCode put(const std::string &file, const std::string &localfile);
+    proto::ServerErrorCode get(const std::string &file, const std::string &localfile);
+    proto::ServerErrorCode del(const std::string &file);
+    proto::ServerErrorCode pwd(std::string &s);
 
     bool connected() const;
 
     std::string get_cwd() const;
     std::string get_login() const;
+    const char *get_ip() const;
 private:
     std::unique_ptr<tcp_client_socket> sock;
 
