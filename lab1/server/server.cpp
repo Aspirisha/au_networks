@@ -205,6 +205,15 @@ void Server::set_root_directory(const fs::path &root_dir) {
 }
 
 Server::~Server() {
+    users_mutex.lock();
+    for (auto &user : users) {
+        if (user.login == login) {
+            user.is_connected = false;
+            break;
+        }
+    }
+    users_mutex.unlock();
+
     delete client;
 }
 
