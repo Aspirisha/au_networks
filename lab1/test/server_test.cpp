@@ -274,10 +274,11 @@ TEST_F(SingleClientServerInstance, get_fail) {
     get("unexistent.txt", "resources/petya/file.txt", proto::FILE_NOT_FOUND);
 }
 
+// put should create directories if they are abcent
 TEST_F(SingleClientServerInstance, put_fail) {
     SetUp(2);
     connect(Petya);
-    put("unexistent/file.txt", "resources/petya/file.txt", proto::INVALID_OPERATION);
+    put("unexistent/file.txt", "resources/petya/file.txt", proto::SUCCESS);
 }
 
 

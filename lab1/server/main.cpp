@@ -18,7 +18,12 @@ void *process_client(void *stream_socket_void) {
     Server server((stream_socket *)stream_socket_void);
 
     while (true) {
-        server.process_client_message();
+        try {
+            server.process_client_message();
+        } catch (std::logic_error &e) {
+            cout << e.what() << endl;
+            break;
+        }
     }
 
     return nullptr;
@@ -27,7 +32,7 @@ void *process_client(void *stream_socket_void) {
 void *user_info_dumper(void *) {
     while (true) {
         Server::save_clients_info();
-        sleep(60000);
+        sleep(60);
     }
 
     return nullptr;
@@ -69,7 +74,7 @@ int main(int argc, const char **argv) {
         cout << "Client connected\n";
         pthread_t thread;
         if (pthread_create(&thread, NULL, process_client, client)) {
-            cerr << "Error creating client processing thread\n";
+            cerr << "Error creating Client processing thread\n";
         }
         threads.push_back(thread);
     }

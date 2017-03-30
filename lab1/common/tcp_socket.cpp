@@ -41,7 +41,7 @@ void tcp_connection_socket::send(const void *buf, size_t size) {
 
     char *cbuf = (char *) buf;
     while (written_bytes < size) {
-        ssize_t wb = write(socket_fd, cbuf + written_bytes, size - written_bytes);
+        ssize_t wb = ::send(socket_fd, cbuf + written_bytes, size - written_bytes, MSG_NOSIGNAL);
         if (wb <= 0) {
             throw std::logic_error("Error writing");
         }
@@ -80,7 +80,8 @@ int hostname_to_ip(const char *hostname, char *ip) {
 
 tcp_client_socket::tcp_client_socket(const char *server_addr, int port) :
         tcp_socket(socket(AF_INET, SOCK_STREAM, 0)),
-        server_addr(server_addr), port(port) { }
+        server_addr(server_addr), port(port) {
+}
 
 sockaddr_in init_address(const char *server_addr, int port) {
     sockaddr_in serv_addr;

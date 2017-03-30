@@ -87,7 +87,9 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
         proto::ConnectResponse(proto::SUCCESS).send(*client);
     }
 
+    std::cout << "Client " << msg->login << " connected\n";
     fs::create_directories(root_directory / msg->login);
+    login = msg->login;
     user_root_directory = current_directory = fs::canonical(root_directory / msg->login);
     is_connected = true;
 }
@@ -139,6 +141,16 @@ void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
 void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
     fs::path realpath = current_directory/msg->dst_file;
 
+    fs::path dir = realpath.parent_path();
+    if (!fs::exists(dir)) {
+        try {
+            fs::create_directories(dir);
+        } catch (fs::filesystem_error &e) {
+            proto::PutResponse(proto::INVALID_OPERATION).send(*client);
+        }
+
+    }
+
     std::ofstream out(realpath.string(), std::ofstream::binary);
     out.write((const char *) msg->file_data.data(), msg->file_data.size());
 
@@ -151,6 +163,7 @@ void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
 
 void Server::process_ls(std::shared_ptr<proto::LsMessage> msg) {
     std::vector<std::string> entries;
+    std::cout << "list directory content for " << login << std::endl;
     for(auto entry = fs::directory_iterator(current_directory); entry != fs::directory_iterator(); ++entry) {
         entries.push_back(entry->path().filename().string());
     }

@@ -21,7 +21,7 @@ struct UserInfo {
 };
 
 /**
- * Each server processes single client
+ * Each server processes single Client
  */
 class Server {
 public:
@@ -52,6 +52,7 @@ private:
 
 
     stream_socket *client;
+    std::string login;
     boost::filesystem::path current_directory;
     boost::filesystem::path user_root_directory;
     bool is_connected = false;

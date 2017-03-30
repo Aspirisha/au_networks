@@ -1,4 +1,4 @@
-set(SOURCE_FILES main.cpp)
+set(SOURCE_FILES main.cpp Client.cpp)
 
 add_executable(client64 ${SOURCE_FILES})
 set_target_properties(client64 PROPERTIES COMPILE_FLAGS "-m64" LINK_FLAGS "-m64")
