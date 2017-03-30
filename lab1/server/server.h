@@ -41,6 +41,7 @@ private:
     void process_put(std::shared_ptr<proto::PutMessage> msg);
     void process_del(std::shared_ptr<proto::DelMessage> msg);
     void process_ls(std::shared_ptr<proto::LsMessage> msg);
+    void process_pwd(std::shared_ptr<proto::PwdMessage> msg);
 
     static std::mutex users_mutex;
     static std::list<UserInfo> users;

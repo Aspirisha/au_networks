@@ -40,6 +40,9 @@ void Server::process_client_message() {
         case proto::DEL:
             process_del(std::dynamic_pointer_cast<proto::DelMessage>(msg));
             break;
+        case proto::PWD:
+            process_pwd(std::dynamic_pointer_cast<proto::PwdMessage>(msg));
+            break;
     }
 }
 
@@ -115,13 +118,18 @@ void Server::process_cd(std::shared_ptr<proto::CdMessage> msg) {
 }
 
 void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
-    if (!fs::exists(msg->src_file)) {
-        proto::GetResponse(proto::INVALID_OPERATION, {}).send(*client);
+    fs::path realpath = current_directory/msg->src_file;
+
+    if (!fs::exists(realpath)) {
+        proto::GetResponse(proto::FILE_NOT_FOUND, {}).send(*client);
         return;
     }
 
-    std::ifstream in(msg->src_file, std::ifstream::binary);
-    uintmax_t size = fs::file_size(msg->src_file);
+    std::ifstream in(realpath.string(), std::ifstream::binary);
+
+    // this of course should be really read partially and sent chunk by chunk,
+    // but let's keep everything simple for now
+    uintmax_t size = fs::file_size(realpath);
     std::vector<uint8_t> data(size);
     in.read((char *) data.data(), size);
 
@@ -129,15 +137,22 @@ void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
 }
 
 void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
-    std::ofstream out(msg->dst_file, std::ofstream::binary);
+    fs::path realpath = current_directory/msg->dst_file;
+
+    std::ofstream out(realpath.string(), std::ofstream::binary);
     out.write((const char *) msg->file_data.data(), msg->file_data.size());
-    proto::PutResponse(proto::SUCCESS).send(*client);
+
+    if (out.tellp() != msg->file_data.size()) {
+        proto::PutResponse(proto::INVALID_OPERATION).send(*client);
+    } else {
+        proto::PutResponse(proto::SUCCESS).send(*client);
+    }
 }
 
 void Server::process_ls(std::shared_ptr<proto::LsMessage> msg) {
     std::vector<std::string> entries;
     for(auto entry = fs::directory_iterator(current_directory); entry != fs::directory_iterator(); ++entry) {
-        entries.push_back(entry->path().string());
+        entries.push_back(entry->path().filename().string());
     }
 
     proto::LsResponse(proto::SUCCESS, entries).send(*client);
@@ -182,6 +197,44 @@ void Server::read_users_info() {
     }
     users_mutex.unlock();
 }
+
+
+// taken from http://stackoverflow.com/questions/10167382/boostfilesystem-get-relative-path
+static fs::path relativeTo(fs::path from, fs::path to) {
+    // Start at the root path and while they are the same then do nothing then when they first
+    // diverge take the remainder of the two path and replace the entire from path with ".."
+    // segments.
+    fs::path::const_iterator fromIter = from.begin();
+    fs::path::const_iterator toIter = to.begin();
+
+    // Loop through both
+    while (fromIter != from.end() && toIter != to.end() && (*toIter) == (*fromIter)) {
+        ++toIter;
+        ++fromIter;
+    }
+
+    fs::path finalPath;
+    while (fromIter != from.end()) {
+        finalPath /= "..";
+        ++fromIter;
+    }
+
+    while (toIter != to.end()) {
+        finalPath /= *toIter;
+        ++toIter;
+    }
+
+    return finalPath;
+}
+
+void Server::process_pwd(std::shared_ptr<proto::PwdMessage> msg) {
+    fs::path rel = relativeTo(user_root_directory, current_directory);
+    auto abs = "/" / rel;
+
+    proto::PwdResponse(proto::SUCCESS, abs.string()).send(*client);
+}
+
+
 
 
 

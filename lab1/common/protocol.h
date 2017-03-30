@@ -21,6 +21,7 @@ enum MessageType : uint8_t
     GET,
     PUT,
     DEL,
+    PWD,
     DISCONNECT
 };
 
@@ -29,6 +30,7 @@ enum ServerErrorCode : uint8_t {
     INVALID_OPERATION,
     INVALID_PASSWORD,
     INVALID_LOGIN,
+    FILE_NOT_FOUND,
     WRONG_PASSWORD,
     CLIENT_ALREADY_CONNECTED
 };
@@ -93,6 +95,15 @@ struct ConnectMessage : public ClientMessage {
 
     std::string login;
     std::string password;
+protected:
+    uint64_t evaluate_body_serialized_size() const override;
+};
+
+struct PwdMessage : public ClientMessage {
+    PwdMessage();
+    PwdMessage(LengthPrefixedMessage serialized);
+    LengthPrefixedMessage serialize() const override;
+    MessageType type() const override;
 protected:
     uint64_t evaluate_body_serialized_size() const override;
 };
@@ -194,6 +205,18 @@ struct LsResponse : public ServerMessage {
 protected:
     uint64_t evaluate_body_serialized_size() const override;
 };
+
+struct PwdResponse : public ServerMessage {
+    PwdResponse(ServerErrorCode error, const std::string &cwd);
+    PwdResponse(LengthPrefixedMessage serialized);
+    LengthPrefixedMessage serialize() const override;
+    MessageType type() const override;
+
+    std::string cwd;
+protected:
+    uint64_t evaluate_body_serialized_size() const override;
+};
+
 
 struct GetResponse : public ServerMessage {
     GetResponse(ServerErrorCode error, const std::vector<uint8_t>& file_data);

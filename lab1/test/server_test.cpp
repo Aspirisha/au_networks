@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string/replace.hpp>
+#include <fstream>
 #include "../common/tcp_socket.h"
 #include "../server/server.h"
 #include "../common/protocol.h"
@@ -97,8 +98,81 @@ protected:
         }
 
         client->connect();
-
     }
+
+    void connect(const UserInfo &user, proto::ServerErrorCode expected_error = proto::SUCCESS) {
+        proto::ConnectMessage msg(user.login, user.password);
+        auto response = send_message_and_get_response(msg);
+        ASSERT_EQ(response->error, expected_error);
+        ASSERT_EQ(response->type(), proto::CONNECT);
+    }
+
+    void pwd(const std::string &expected_cwd) {
+        proto::PwdMessage pwd_message;
+        auto response = send_message_and_get_response(pwd_message);
+        ASSERT_EQ(response->error, proto::SUCCESS);
+        ASSERT_EQ(response->type(), proto::PWD);
+
+        auto pwd_response = std::dynamic_pointer_cast<proto::PwdResponse>(response);
+        ASSERT_EQ(pwd_response->cwd, expected_cwd);
+    }
+
+    void ls(const std::set<std::string> &expected_files) {
+        proto::LsMessage ls_message;
+        auto response = send_message_and_get_response(ls_message);
+        ASSERT_EQ(response->error, proto::SUCCESS);
+        ASSERT_EQ(response->type(), proto::LS);
+
+        auto ls_response = std::dynamic_pointer_cast<proto::LsResponse>(response);
+
+        std::set<std::string> response_files(ls_response->files.begin(), ls_response->files.end());
+        ASSERT_EQ(expected_files, response_files);
+    }
+
+    void get(const std::string server_file, const std::string &reference_file, proto::ServerErrorCode expected_error = proto::SUCCESS) {
+        proto::GetMessage get_message(server_file);
+        auto response = send_message_and_get_response(get_message);
+        ASSERT_EQ(response->error, expected_error);
+        ASSERT_EQ(response->type(), proto::GET);
+
+        std::ifstream in(reference_file, std::ifstream::binary);
+
+        // this of course should be really read partially and sent chunk by chunk,
+        // but let's keep everything simple for now
+        uintmax_t size = fs::file_size(reference_file);
+        std::vector<uint8_t> data(size);
+        in.read((char *) data.data(), size);
+
+        if (expected_error == proto::SUCCESS) {
+            auto get_response = std::dynamic_pointer_cast<proto::GetResponse>(response);
+            ASSERT_EQ(data.size(), get_response->file_data.size());
+            ASSERT_EQ(0, memcmp(data.data(), get_response->file_data.data(), size));
+        }
+    }
+
+
+    void put(const std::string server_file, const std::string &reference_file, proto::ServerErrorCode expected_error = proto::SUCCESS) {
+        std::ifstream in(reference_file, std::ifstream::binary);
+
+        // this of course should be really read partially and sent chunk by chunk,
+        // but let's keep everything simple for now
+        uintmax_t size = fs::file_size(reference_file);
+        std::vector<uint8_t> data(size);
+        in.read((char *) data.data(), size);
+
+        proto::PutMessage put_message(server_file, data);
+        auto response = send_message_and_get_response(put_message);
+        ASSERT_EQ(response->error, expected_error);
+        ASSERT_EQ(response->type(), proto::PUT);
+    }
+
+    void cd(const std::string& dir, proto::ServerErrorCode expected_error = proto::SUCCESS) {
+        proto::CdMessage cd_message(dir);
+        auto response = send_message_and_get_response(cd_message);
+        ASSERT_EQ(response->error, expected_error);
+        ASSERT_EQ(response->type(), proto::CD);
+    }
+
     void TearDown() override {
         if (messages_sent == info.messages_number) {
             if (pthread_join(serv_thread, nullptr)) {
@@ -106,6 +180,7 @@ protected:
             }
         } else {
             pthread_cancel(serv_thread);
+            FAIL();
         }
         delete client;
     }
@@ -125,24 +200,13 @@ protected:
 
 TEST_F(SingleClientServerInstance, connect_simple) {
     SetUp(1);
-    proto::ConnectMessage msg(Vasya.login, Vasya.password);
-
-    auto response = send_message_and_get_response(msg);
-    ASSERT_EQ(response->error, proto::SUCCESS);
-    ASSERT_EQ(response->type(), proto::CONNECT);
+    connect(Vasya);
 }
 
 TEST_F(SingleClientServerInstance, connect_double) {
     SetUp(2);
-    proto::ConnectMessage msg(Vasya.login, Vasya.password);
-
-    auto response = send_message_and_get_response(msg);
-    ASSERT_EQ(response->error, proto::SUCCESS);
-    ASSERT_EQ(response->type(), proto::CONNECT);
-
-    response = send_message_and_get_response(msg);
-    ASSERT_EQ(response->error, proto::CLIENT_ALREADY_CONNECTED);
-    ASSERT_EQ(response->type(), proto::CONNECT);
+    connect(Vasya);
+    connect(Vasya, proto::CLIENT_ALREADY_CONNECTED);
 }
 
 TEST_F(SingleClientServerInstance, connect_invalid_names) {
@@ -150,10 +214,7 @@ TEST_F(SingleClientServerInstance, connect_invalid_names) {
     SetUp(invalid_names.size());
 
     for (const std::string &name: invalid_names) {
-        proto::ConnectMessage msg(name, "1234");
-        auto response = send_message_and_get_response(msg);
-        ASSERT_EQ(response->error, proto::INVALID_LOGIN);
-        ASSERT_EQ(response->type(), proto::CONNECT);
+        connect({name, "1234"}, proto::INVALID_LOGIN);
     }
 }
 
@@ -162,23 +223,62 @@ TEST_F(SingleClientServerInstance, connect_invalid_passwords) {
     SetUp(invalid_passwords.size());
 
     for (const std::string &p: invalid_passwords) {
-        proto::ConnectMessage msg("vasya", p);
-        auto response = send_message_and_get_response(msg);
-        ASSERT_EQ(response->error, proto::INVALID_PASSWORD);
-        ASSERT_EQ(response->type(), proto::CONNECT);
+        connect({"vasya", p}, proto::INVALID_PASSWORD);
     }
 }
 
-TEST_F(SingleClientServerInstance, connect_wrong_passwords) {
-    std::vector<std::string> invalid_passwords = {"va sya", "", "veryveryverylongpasswordsarebad"};
-    SetUp(invalid_passwords.size());
-
-    for (const std::string &p: invalid_passwords) {
-        proto::ConnectMessage msg("vasya", p);
-        auto response = send_message_and_get_response(msg);
-        ASSERT_EQ(response->error, proto::INVALID_PASSWORD);
-        ASSERT_EQ(response->type(), proto::CONNECT);
-    }
+TEST_F(SingleClientServerInstance, ls) {
+    SetUp(2);
+    connect(Petya);
+    ls({"file.txt", "folder1", "folder2"});
 }
+
+TEST_F(SingleClientServerInstance, pwd) {
+    SetUp(2);
+    connect(Petya);
+    pwd("/");
+}
+
+TEST_F(SingleClientServerInstance, cd_pwd) {
+    SetUp(3);
+    connect(Petya);
+    cd("folder2");
+    pwd("/folder2");
+}
+
+TEST_F(SingleClientServerInstance, cd_identity) {
+    SetUp(3);
+    connect(Petya);
+    cd(".");
+    pwd("/");
+}
+
+TEST_F(SingleClientServerInstance, get) {
+    SetUp(2);
+    connect(Petya);
+    get("file.txt", "resources/petya/file.txt");
+}
+
+TEST_F(SingleClientServerInstance, put) {
+    SetUp(5);
+    connect(Petya);
+    put("file_put.txt", "resources/petya/file.txt");
+    get("file_put.txt", "resources/petya/file.txt");
+    put("folder1/file_put.txt", "resources/petya/file.txt");
+    get("folder1/file_put.txt", "resources/petya/file.txt");
+}
+
+TEST_F(SingleClientServerInstance, get_fail) {
+    SetUp(2);
+    connect(Petya);
+    get("unexistent.txt", "resources/petya/file.txt", proto::FILE_NOT_FOUND);
+}
+
+TEST_F(SingleClientServerInstance, put_fail) {
+    SetUp(2);
+    connect(Petya);
+    put("unexistent/file.txt", "resources/petya/file.txt", proto::INVALID_OPERATION);
+}
+
 
 }

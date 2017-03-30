@@ -27,6 +27,8 @@ std::shared_ptr<ClientMessage> ClientMessage::deserialize(
             return std::shared_ptr<ClientMessage>(new PutMessage(msg));
         case DEL:
             return std::shared_ptr<ClientMessage>(new DelMessage(msg));
+        case PWD:
+            return std::shared_ptr<ClientMessage>(new PwdMessage(msg));
         default:
             return {};
     }
@@ -300,6 +302,8 @@ std::shared_ptr<ServerMessage> ServerMessage::deserialize(
             return std::shared_ptr<ServerMessage>(new PutResponse(msg));
         case DEL:
             return std::shared_ptr<ServerMessage>(new DelResponse(msg));
+        case PWD:
+            return std::shared_ptr<ServerMessage>(new PwdResponse(msg));
         default:
             return {};
     }
@@ -477,6 +481,48 @@ MessageType DelResponse::type() const {
 
 uint64_t DelResponse::evaluate_body_serialized_size() const {
     return sizeof(uint8_t);
+}
+
+
+uint64_t PwdMessage::evaluate_body_serialized_size() const {
+    return 0;
+}
+
+PwdMessage::PwdMessage(LengthPrefixedMessage serialized) { }
+
+PwdMessage::PwdMessage() { }
+
+LengthPrefixedMessage PwdMessage::serialize() const {
+    auto msg = serialize_header();
+    return LengthPrefixedMessage(msg.second, std::move(msg.first));
+}
+
+MessageType PwdMessage::type() const {
+    return PWD;
+}
+
+PwdResponse::PwdResponse(proto::ServerErrorCode error,
+                                const std::string &cwd) : ServerMessage(error), cwd(cwd) { }
+
+PwdResponse::PwdResponse(LengthPrefixedMessage serialized) : ServerMessage(serialized) {
+    auto iter = std::next(serialized.body_begin());
+    cwd = deserialize_string_uint16(iter);
+}
+
+LengthPrefixedMessage PwdResponse::serialize() const {
+    auto msg = serialize_header();
+
+    serialize_string_uint16(cwd, msg.first);
+
+    return LengthPrefixedMessage(msg.second, std::move(msg.first));
+}
+
+MessageType PwdResponse::type() const {
+    return PWD;
+}
+
+uint64_t PwdResponse::evaluate_body_serialized_size() const {
+    return sizeof(uint8_t) + sizeof(uint16_t) + cwd.size();
 }
 
 
