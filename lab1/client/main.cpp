@@ -21,7 +21,7 @@ void print_help() {
     cout << "Available commands: \n";
     cout << "\thelp -- print this help\n";
     cout << "\texit -- exit form the program\n";
-    cout << "\tconnect <login> <password> -- connect to the server vfs with give credentials\n";
+    cout << "\tconnect <login> <password> -- connect to the server vfs with given credentials\n";
     cout << "\tpwd -- print current vfs directory\n";
     cout << "\tls -- print current vfs directory content\n";
     cout << "\tcd <path> -- change current vfs directory\n";
