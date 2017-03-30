@@ -24,6 +24,15 @@ void *process_client(void *stream_socket_void) {
     return nullptr;
 }
 
+void *user_info_dumper(void *) {
+    while (true) {
+        Server::save_clients_info();
+        sleep(60000);
+    }
+
+    return nullptr;
+}
+
 int main(int argc, const char **argv) {
     const char* ip = default_ip;
     int port = default_port;
@@ -46,6 +55,14 @@ int main(int argc, const char **argv) {
 
     vector<pthread_t> threads;
     Server::set_root_directory("clients");
+
+    cout << "Starting server with ip " << ip << " and port " << port << endl;
+    pthread_t persistence_thread;
+    if (pthread_create(&persistence_thread, NULL, user_info_dumper, nullptr)) {
+        cerr << "Error creating persistence thread\n";
+        return -1;
+    }
+
     while (true) {
         stream_socket * client = server_socket.accept_one_client();
 
@@ -57,6 +74,6 @@ int main(int argc, const char **argv) {
         threads.push_back(thread);
     }
 
-    Server::save_clients_info();
+
     return 0;
 }
