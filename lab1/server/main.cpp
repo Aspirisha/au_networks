@@ -71,7 +71,7 @@ int main(int argc, const char **argv) {
     while (true) {
         stream_socket * client = server_socket.accept_one_client();
 
-        cout << "Client connected\n";
+        cout << "Client socket connected\n";
         pthread_t thread;
         if (pthread_create(&thread, NULL, process_client, client)) {
             cerr << "Error creating Client processing thread\n";

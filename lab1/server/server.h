@@ -14,10 +14,11 @@
 #include "tcp_socket.h"
 
 struct UserInfo {
-    UserInfo(const std::string &login, const std::string &password);
+    UserInfo(const std::string &login, const std::string &password, bool is_connected = false);
 
     std::string login;
     std::string password;
+    bool is_connected;
 };
 
 /**

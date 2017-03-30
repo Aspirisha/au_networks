@@ -69,13 +69,25 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
     users_mutex.lock();
     for (auto &user: users) {
         if (user.login == msg->login) {
+            if (user.is_connected) {
+                try {
+                    proto::ConnectResponse(
+                            proto::CLIENT_ALREADY_CONNECTED).send(*client);
+                } catch (std::exception & e) {
+                    std::cerr << e.what() << std::endl;
+                }
+                users_mutex.unlock();
+                return;
+            } else {
+                user.is_connected = true;
+            }
             found = true;
             password_match = user.password == msg->password;
             break;
         }
     }
     if (!found) {
-        users.push_back(UserInfo(msg->login, msg->password));
+        users.push_back(UserInfo(msg->login, msg->password, true));
     }
     users_mutex.unlock();
 
@@ -95,7 +107,8 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
     is_connected = true;
 }
 
-UserInfo::UserInfo(const std::string &login, const std::string &password) : login(login), password(password) { }
+UserInfo::UserInfo(const std::string &login, const std::string &password, bool is_connected)
+        : login(login), password(password), is_connected(is_connected) { }
 
 
 Server::Server(stream_socket * client) : client(client) { }
@@ -119,6 +132,7 @@ void Server::process_cd(std::shared_ptr<proto::CdMessage> msg) {
     }
 
     current_directory = dest;
+    std::cout << "client " << login << " changes directory to " << dest.string() << "\n";
     dest = "/"/relative_to(user_root_directory, dest);
     proto::CdResponse(proto::SUCCESS, dest.string()).send(*client);
 }
@@ -127,6 +141,7 @@ void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
     fs::path realpath = current_directory/msg->src_file;
 
     if (!fs::exists(realpath)) {
+        std::cout << "client " << login << " tries to get unexistent file " << realpath.string() << "\n";
         proto::GetResponse(proto::FILE_NOT_FOUND, {}).send(*client);
         return;
     }
@@ -138,7 +153,7 @@ void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
     uintmax_t size = fs::file_size(realpath);
     std::vector<uint8_t> data(size);
     in.read((char *) data.data(), size);
-
+    std::cout << "client " << login << " gets file " << realpath.string() << "\n";
     proto::GetResponse(proto::SUCCESS, data).send(*client);
 }
 
@@ -160,6 +175,7 @@ void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
     if (out.tellp() != msg->file_data.size()) {
         proto::PutResponse(proto::INVALID_OPERATION).send(*client);
     } else {
+        std::cout << "client " << login << " puts file " << realpath.string() << "\n";
         proto::PutResponse(proto::SUCCESS).send(*client);
     }
 }
