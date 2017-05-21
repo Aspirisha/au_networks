@@ -16,6 +16,7 @@
 void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender, sockaddr &actual_sender);
 void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender);
 int read_some(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender);
+int write_some(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa);
 void write_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa);
 
 struct __attribute__ ((packed)) TransportHeader {
@@ -101,6 +102,7 @@ struct SenderBuffer {
     }
 
     enum MessageState {
+        EMPTY,
         NEW,
         SENT,
         ACKED
@@ -108,7 +110,7 @@ struct SenderBuffer {
 
     struct AcknowledgeableMsg {
         TransportDataMessage msg;
-        MessageState state;
+        MessageState state = EMPTY;
         std::chrono::steady_clock::time_point last_send_timestamp;
     };
 
@@ -214,7 +216,10 @@ public:
     void send(const void *buf, size_t size) override;
     void recv(void *buf, size_t size) override;
 
+    void send_unreliable(const void *buf, size_t size);
+
     uint16_t get_own_port() const { return own_port; }
+    uint16_t get_peer_port() const { return peer_port; }
 protected:
 
     void init();
@@ -225,12 +230,12 @@ protected:
     int socket_fd;
     int port_fd;
     int own_port;
-    const int peer_port;
+    int peer_port;
     sockaddr peer_addr;
     SenderBuffer send_buffer;
     ReceiveBuffer recv_buffer;
 
-    size_t current_window = 1500;
+    size_t current_window = 1;
     static const size_t default_mtu = 1500;
     static const int max_port = 65535;
     static const int receive_buffer_size = 65535;
@@ -246,11 +251,12 @@ public:
     void send(const void *buf, size_t size) override;
     void recv(void *buf, size_t size) override;
 
+    void send_unreliable(const void *buf, size_t size);
+
     uint16_t get_own_port() const { return sock.get_own_port(); }
-    uint16_t get_peer_port() const { return port; }
+    uint16_t get_peer_port() const { return sock.get_peer_port(); }
 protected:
     au_stream_socket sock;
-    uint16_t port;
 };
 
 
