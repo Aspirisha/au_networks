@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <iostream>
 #include "protocol.h"
+#include "persistence.h"
 
 namespace proto
 {
@@ -39,7 +40,7 @@ std::shared_ptr<ClientMessage> ClientMessage::receive_message(stream_socket *s) 
     s->recv(data.data(), proto::Message::header_length);
 
     auto iter = data.cbegin();
-    uint64_t len = proto::Message::deserialize_uint64_t(iter);
+    uint64_t len = deserialize_uint64_t(iter);
 
     data.resize(proto::Message::header_length + len);
     s->recv(data.data() + proto::Message::header_length, len);
@@ -78,81 +79,6 @@ ConnectMessage::ConnectMessage(LengthPrefixedMessage serialized) {
     password = deserialize_string_uint16(iter);
 }
 
-
-void Message::serialize_string_uint16(const std::string &s,
-                                             std::vector<uint8_t> &data) {
-    serialize_uint16_t(s.size(), data);
-    std::copy(s.begin(), s.end(), std::back_inserter(data));
-}
-
-void Message::serialize_uint64_t(uint64_t s,
-                                        std::vector<uint8_t> &data) {
-    uint32_t hi = (uint32_t) (s >> 32);
-    uint32_t lo = (uint32_t) (s & 0xFFFFFFFF);
-    
-    serialize_uint32_t(hi, data);
-    serialize_uint32_t(lo, data);
-}
-
-void Message::serialize_uint32_t(uint32_t s,
-                                        std::vector<uint8_t> &data) {
-    for (int i = 24; i >= 0; i -= 8) {
-        uint8_t byte = (uint8_t) (s >> i);
-        data.push_back(byte);
-    }
-}
-
-void Message::serialize_uint16_t(uint16_t s,
-                                        std::vector<uint8_t> &data) {
-    data.push_back(s >> 8);
-    data.push_back(s & 0xFF);
-}
-
-uint16_t Message::deserialize_uint16_t(
-        std::vector<uint8_t>::const_iterator &iter) {
-    uint16_t hi = *iter++;
-    uint16_t lo = *iter++;
-    
-    return (hi << 8) + lo;
-}
-
-uint32_t Message::deserialize_uint32_t(
-        std::vector<uint8_t>::const_iterator &iter) {
-    uint32_t result = 0;
-    for (int i = 24; i >= 0; i -= 8) {
-        uint32_t byte = *iter++;
-        result |= (byte << i);
-    }
-    
-    return result;
-}
-
-uint64_t Message::deserialize_uint64_t(
-        std::vector<uint8_t>::const_iterator &iter) {
-    uint64_t hi = deserialize_uint32_t(iter);
-    uint64_t lo = deserialize_uint32_t(iter);
-    
-    return (hi << 32) + lo;
-}
-
-std::string Message::deserialize_string_uint16(
-        std::vector<uint8_t>::const_iterator &iter) {
-    uint16_t string_length = deserialize_uint16_t(iter);
-
-    std::string s(iter, std::next(iter, string_length));
-    
-    iter = std::next(iter, string_length);
-    return s;
-}
-
-void Message::serialize_uint8_t(uint8_t s, std::vector<uint8_t> &data) {
-    data.push_back(s);
-}
-
-uint8_t Message::deserialize_uint8_t(
-        std::vector<uint8_t>::const_iterator &iter) {
-    return *iter++;
-}
 
 std::pair<std::vector<uint8_t>, uint64_t> Message::serialize_header() const {
     std::vector<uint8_t> data;
@@ -327,7 +253,7 @@ std::shared_ptr<ServerMessage> ServerMessage::receive_message(stream_socket &s) 
     s.recv(data.data(), proto::Message::header_length);
 
     auto iter = data.cbegin();
-    uint64_t len = proto::Message::deserialize_uint64_t(iter);
+    uint64_t len = deserialize_uint64_t(iter);
 
     data.resize(proto::Message::header_length + len);
     s.recv(data.data() + proto::Message::header_length, len);

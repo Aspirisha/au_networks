@@ -27,7 +27,7 @@ public:
     std::string get_login() const;
     const char *get_ip() const;
 private:
-    std::unique_ptr<tcp_client_socket> sock;
+    std::unique_ptr<stream_client_socket> sock;
 
     const char *ip;
     int port;

@@ -1,0 +1,3 @@
+[submodule "lab1/easyloggingpp"]
+	path = lab1/easyloggingpp
+	url = https://github.com/muflihun/easyloggingpp.git

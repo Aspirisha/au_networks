@@ -8,5 +8,3 @@ add_subdirectory(client)
 add_subdirectory(server)
 add_subdirectory(common)
 add_subdirectory(test)
-
-#install(TARGETS server client32 client64 DESTINATION bin/)

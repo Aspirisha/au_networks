@@ -7,6 +7,7 @@
 #include "tcp_socket.h"
 #include "protocol.h"
 #include "Client.h"
+#include "../easyloggingpp/src/easylogging++.h"
 
 void process_cd(Client &client);
 
@@ -45,11 +46,16 @@ void process_connect(Client &client) {
             case proto::WRONG_PASSWORD:
                 std::cerr << "wrong password\n";
                 break;
+            case proto::UNKNOWN_SOCKET:
+                std::cerr << "Environment variable $STREAM_SOCK_TYPE defines unknown socket type: "
+                    << getenv("STREAM_SOCK_TYPE") << std::endl;
+                break;
             default:
                 break;
         }
     } catch (std::logic_error &e) {
-        cerr << "Error connecting to server\n";
+        LOG(DEBUG) << e.what();
+        LOG(ERROR) << "Error connecting to server";
     }
 }
 
@@ -110,7 +116,7 @@ void * async_put(void *data_raw) {
 
 void * async_get(void *data_raw) {
     GetPutData *put_data = (GetPutData *) data_raw;
-
+    // TODO do it under mutex
     try {
         switch (put_data->client.get(put_data->file, put_data->local_file)) {
             case proto::SUCCESS:
@@ -134,7 +140,7 @@ void process_put(Client &client) {
 
     cin >> data->local_file;
     cin >> data->file;
-
+    // TODO do it under mutex
     pthread_t putter;
     if (pthread_create(&putter, NULL, async_put, data)) {
         cout << "Error creating put processing thread\n";
@@ -149,8 +155,9 @@ void process_get(Client &client) {
     cin >> data->local_file;
     pthread_t getter;
     if (pthread_create(&getter, NULL, async_get, data)) {
-        cout << "Error creating put processing thread\n";
+        cout << "Error creating get processing thread\n";
     }
+    pthread_detach(getter);
 }
 
 void process_del(Client &client) {
@@ -177,6 +184,8 @@ void process_pwd(Client &client) {
 }
 
 int main(int argc, char **argv) {
+    el::Configurations conf("clientlogger.conf");
+    el::Loggers::reconfigureAllLoggers(conf);
     cout << "Welcome to vfs Client!\n";
 
     const char* ip = default_ip;

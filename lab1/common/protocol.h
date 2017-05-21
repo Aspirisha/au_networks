@@ -32,7 +32,8 @@ enum ServerErrorCode : uint8_t {
     INVALID_LOGIN,
     FILE_NOT_FOUND,
     WRONG_PASSWORD,
-    CLIENT_ALREADY_CONNECTED
+    CLIENT_ALREADY_CONNECTED,
+    UNKNOWN_SOCKET
 };
 
 struct LengthPrefixedMessage {
@@ -53,18 +54,6 @@ struct Message {
     virtual ~Message() {}
     virtual LengthPrefixedMessage serialize() const = 0;
 
-    static void serialize_uint32_t(uint32_t s, std::vector<uint8_t> &data);
-    static void serialize_uint16_t(uint16_t s, std::vector<uint8_t> &data);
-    static void serialize_uint8_t(uint8_t s, std::vector<uint8_t> &data);
-    static void serialize_uint64_t(uint64_t s, std::vector<uint8_t> &data);
-    static void serialize_string_uint16(const std::string &s, std::vector<uint8_t> &data);
-
-    static uint32_t deserialize_uint32_t(std::vector<uint8_t>::const_iterator &iter);
-    static uint16_t deserialize_uint16_t(std::vector<uint8_t>::const_iterator &iter);
-    static uint8_t deserialize_uint8_t(std::vector<uint8_t>::const_iterator &iter);
-    static uint64_t deserialize_uint64_t(std::vector<uint8_t>::const_iterator &iter);
-    static std::string deserialize_string_uint16(
-            std::vector<uint8_t>::const_iterator &iter);
     virtual MessageType type() const = 0;
 
     void send(stream_socket &s) const;

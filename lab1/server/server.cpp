@@ -7,6 +7,7 @@
 #include <regex>
 #include "server.h"
 #include "util.h"
+#include "../easyloggingpp/src/easylogging++.h"
 
 namespace fs = boost::filesystem;
 
@@ -141,7 +142,7 @@ void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
     fs::path realpath = current_directory/msg->src_file;
 
     if (!fs::exists(realpath)) {
-        std::cout << "client " << login << " tries to get unexistent file " << realpath.string() << "\n";
+        LOG(INFO) << "client " << login << " tries to get unexistent file " << realpath.string();
         proto::GetResponse(proto::FILE_NOT_FOUND, {}).send(*client);
         return;
     }
@@ -175,14 +176,14 @@ void Server::process_put(std::shared_ptr<proto::PutMessage> msg) {
     if (out.tellp() != msg->file_data.size()) {
         proto::PutResponse(proto::INVALID_OPERATION).send(*client);
     } else {
-        std::cout << "client " << login << " puts file " << realpath.string() << "\n";
+        LOG(INFO) << "client " << login << " puts file " << realpath.string();
         proto::PutResponse(proto::SUCCESS).send(*client);
     }
 }
 
 void Server::process_ls(std::shared_ptr<proto::LsMessage> msg) {
     std::vector<std::string> entries;
-    std::cout << "list directory content for " << login << std::endl;
+    LOG(INFO) << "list directory content for " << login;
     for(auto entry = fs::directory_iterator(current_directory); entry != fs::directory_iterator(); ++entry) {
         entries.push_back(entry->path().filename().string());
     }

@@ -1,6 +1,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <au_socket.h>
+#include "../easyloggingpp/src/easylogging++.h"
 #include "protocol.h"
 #include "tcp_socket.h"
 #include "server.h"
@@ -39,6 +41,9 @@ void *user_info_dumper(void *) {
 }
 
 int main(int argc, const char **argv) {
+    el::Configurations conf("serverlogger.conf");
+    el::Loggers::reconfigureAllLoggers(conf);
+
     const char* ip = default_ip;
     int port = default_port;
 
@@ -49,32 +54,45 @@ int main(int argc, const char **argv) {
             try {
                 port = std::stoi(argv[2]);
             } catch (std::invalid_argument &e) {
-                cerr << "Port should be integral value, got " << argv[2] << endl;
+                LOG(ERROR) << "Port should be integral value, got " << argv[2];
                 return -1;
             }
         }
     }
 
 
-    tcp_server_socket server_socket(ip, port);
+    stream_server_socket *server_socket = nullptr;
+
+    const char *sock_type = getenv("STREAM_SOCK_TYPE");
+    if (!sock_type || !strcmp(sock_type, "tcp")) {
+        LOG(DEBUG) << "Using tcp_stream_socket implementation";
+        server_socket = new tcp_server_socket(ip, port);
+    } else if (!strcmp(sock_type, "au")) {
+        LOG(DEBUG) << "Using au_stream_socket implementation";
+        server_socket = new au_stream_server_socket(ip, port);
+    } else {
+        LOG(ERROR) << "Environment variable $STREAM_SOCK_TYPE defines unknown socket type: "
+            << sock_type;
+        return 1;
+    }
 
     vector<pthread_t> threads;
     Server::set_root_directory("clients");
 
-    cout << "Starting server with ip " << ip << " and port " << port << endl;
+    LOG(INFO) << "Starting server with ip " << ip << " and own_port " << port;
     pthread_t persistence_thread;
     if (pthread_create(&persistence_thread, NULL, user_info_dumper, nullptr)) {
-        cerr << "Error creating persistence thread\n";
+        LOG(ERROR) << "Error creating persistence thread";
         return -1;
     }
 
     while (true) {
-        stream_socket * client = server_socket.accept_one_client();
+        stream_socket * client = server_socket->accept_one_client();
 
-        cout << "Client socket connected\n";
+        LOG(INFO) << "Client socket connected";
         pthread_t thread;
         if (pthread_create(&thread, NULL, process_client, client)) {
-            cerr << "Error creating Client processing thread\n";
+            LOG(ERROR) << "Error creating Client processing thread";
         }
         threads.push_back(thread);
     }

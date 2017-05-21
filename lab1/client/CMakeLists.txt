@@ -12,3 +12,5 @@ target_link_libraries(client32 common32 pthread)
 
 install(TARGETS client32 client64 EXPORT ServerConfig
         RUNTIME  DESTINATION ${CMAKE_BINARY_DIR}/bin)  # This is for Windows
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/clientlogger.conf DESTINATION ${CMAKE_BINARY_DIR}/bin)

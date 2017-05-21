@@ -11,3 +11,5 @@ set_target_properties(server PROPERTIES COMPILE_FLAGS "-m64" LINK_FLAGS "-m64")
 target_link_libraries(server libserver)
 install(TARGETS server EXPORT ServerConfig
         RUNTIME  DESTINATION ${CMAKE_BINARY_DIR}/bin)  # This is for Windows
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/serverlogger.conf DESTINATION ${CMAKE_BINARY_DIR}/bin)

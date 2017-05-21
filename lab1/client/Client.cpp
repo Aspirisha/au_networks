@@ -5,7 +5,10 @@
 #include <iostream>
 #include <fstream>
 #include <sys/stat.h>
+#include <cstring>
+#include <au_socket.h>
 #include "Client.h"
+#include "../easyloggingpp/src/easylogging++.h"
 
 Client::Client(const char *ip, int port) : ip(ip), port(port) { }
 
@@ -14,7 +17,17 @@ proto::ServerErrorCode Client::connect(const std::string &login, const std::stri
         return proto::CLIENT_ALREADY_CONNECTED;
     }
 
-    sock.reset(new tcp_client_socket(ip, port));
+    const char *sock_type = getenv("STREAM_SOCK_TYPE");
+    if (!sock_type || !strcmp(sock_type, "tcp")) {
+        sock.reset(new tcp_client_socket(ip, port));
+        LOG(DEBUG) << "Using tcp_stream_socket implementation";
+    } else if (!strcmp(sock_type, "au")) {
+        LOG(DEBUG) << "Using au_stream_socket implementation";
+        sock.reset(new au_stream_client_socket(ip, port));
+    } else {
+        return proto::UNKNOWN_SOCKET;
+    }
+
     sock->connect();
 
     proto::ConnectMessage(login, password).send(*sock);
