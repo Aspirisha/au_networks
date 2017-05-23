@@ -248,14 +248,17 @@ protected:
     int port_fd;
     int own_port;
     int peer_port;
+
     sockaddr peer_addr;
     SenderBuffer send_buffer;
     ReceiveBuffer recv_buffer;
 
-    size_t current_window = 1;
-    static const size_t default_mtu = 1500;
+    int simultaneous_acks_to_inc_congestion = 1;
+    uint32_t advertised_window = 1;
+    uint32_t congestion_window = 1;
+    static constexpr uint32_t window_size_ack_seq = 0xffffffff;
     static const int max_port = 65535;
-    static const int receive_buffer_size = 65535;
+
 
     void send_ack(int seq_num, int port, int peer_port, int max, uint64_t request_timestamp);
 };

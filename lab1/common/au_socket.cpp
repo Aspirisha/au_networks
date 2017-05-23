@@ -110,7 +110,7 @@ bool au_stream_socket::try_receive_ack() {
     }
 
     if (r.checksum_ok) {
-        current_window = r.window_size;
+        advertised_window = r.window_size;
     }
 
     return send_buffer.set_acked(r.header.seq_number);
@@ -119,7 +119,9 @@ bool au_stream_socket::try_receive_ack() {
 int au_stream_socket::send_available_segments() {
     auto max_prev_sending_time = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
     SenderBuffer::AcknowledgeableMsg* msgs[2 * max_segments_num];
-    int ready_for_sending = send_buffer.packets_to_send(current_window, msgs, max_prev_sending_time);
+
+    int window_size = std::min(advertised_window, congestion_window);
+    int ready_for_sending = send_buffer.packets_to_send(window_size, msgs, max_prev_sending_time);
 
     int actually_sent = 0;
     for (int i = 0; i < ready_for_sending; i++) {
@@ -171,20 +173,37 @@ void au_stream_socket::send(const void *buf, size_t size) {
         int ret = poll(&fds, 1, time_to_wait);
         if (ret == -1) {
             throw std::logic_error("Polling error");
-        } else if (ret == 0) { // timeout
-            LOG(DEBUG) << "Timed out";
+        } else if (ret == 0) {
+            if (awaiting_ack > 0) {
+                congestion_window = std::max(1u, congestion_window / 2);
+                LOG(DEBUG) << "Decreasing congestion window due to no acks";
+            }
         } else {
             int largest_acked = 0;
-            if ((current_window == 0 || awaiting_ack > 0) && (fds.revents & POLLIN)) {
+            if ((advertised_window == 0 || awaiting_ack > 0) && (fds.revents & POLLIN)) {
                 int max_acks = std::max(1, awaiting_ack);
+                int received_acks = 0;
                 for (int i = 0; i < max_acks; i++) {
                     bool received_ack = try_receive_ack();
 
                     if (received_ack) {
                         acked++;
                         awaiting_ack--;
+                        received_acks++;
                         LOG(DEBUG) << "Received ack. Now waiting for " << awaiting_ack << " acks";
                     }
+                }
+
+                if (received_acks < awaiting_ack / 2) {
+                    simultaneous_acks_to_inc_congestion = std::max(1, simultaneous_acks_to_inc_congestion / 2);
+                    congestion_window = std::max(1u, congestion_window / 2);
+                    LOG(DEBUG) << "Descreasing congestion window; now it is " << congestion_window;
+                }
+
+                if (received_acks >= simultaneous_acks_to_inc_congestion) {
+                    simultaneous_acks_to_inc_congestion <<= 1;
+                    congestion_window = std::min<uint32_t>(2 * congestion_window, max_segments_num);
+                    LOG(DEBUG) << "Increasing congestion window; now it is " << congestion_window;
                 }
             }
 
