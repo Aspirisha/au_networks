@@ -26,6 +26,7 @@ void print_help() {
     cout << "\tpwd -- print current vfs directory\n";
     cout << "\tls -- print current vfs directory content\n";
     cout << "\tcd <path> -- change current vfs directory\n";
+    cout << "\tdel <path> -- delete vfs file or directory\n";
     cout << "\tget <filename> <local file> -- download file from server and save it to <local filename>\n";
     cout << "\tput <local filename> <filename> -- upload <local filename> to server\n";
 }
@@ -214,6 +215,7 @@ int main(int argc, char **argv) {
         if (command == "connect") {
             process_connect(client);
         } else if (command == "exit") {
+            client.disconnect();
             break;
         } else if (command == "ls") {
             process_ls(client);

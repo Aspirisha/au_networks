@@ -151,6 +151,16 @@ protected:
     uint64_t evaluate_body_serialized_size() const override;
 };
 
+struct DisconnectMessage : public ClientMessage {
+    DisconnectMessage() {}
+    DisconnectMessage(LengthPrefixedMessage serialized) { }
+    LengthPrefixedMessage serialize() const override;
+    MessageType type() const override { return DISCONNECT; };
+
+protected:
+    uint64_t evaluate_body_serialized_size() const override { return 0; }
+};
+
 struct ServerMessage : public Message {
     ServerMessage(ServerErrorCode error);
     ServerMessage(LengthPrefixedMessage msg);

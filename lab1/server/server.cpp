@@ -26,7 +26,7 @@ void Server::process_client_message() {
             process_connect(std::dynamic_pointer_cast<proto::ConnectMessage>(msg));
             break;
         case proto::DISCONNECT:
-            pthread_exit(nullptr);
+            process_disconnect(std::dynamic_pointer_cast<proto::DisconnectMessage>(msg));
         case proto::CD:
             process_cd(std::dynamic_pointer_cast<proto::CdMessage>(msg));
             break;
@@ -70,8 +70,10 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
     users_mutex.lock();
     for (auto &user: users) {
         if (user.login == msg->login) {
+            password_match = user.password == msg->password;
             if (user.is_connected) {
                 try {
+                    LOG(INFO) << "User is already connected!";
                     proto::ConnectResponse(
                             proto::CLIENT_ALREADY_CONNECTED).send(*client);
                 } catch (std::exception & e) {
@@ -80,10 +82,9 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
                 users_mutex.unlock();
                 return;
             } else {
-                user.is_connected = true;
+                user.is_connected = password_match;
             }
             found = true;
-            password_match = user.password == msg->password;
             break;
         }
     }
@@ -92,13 +93,11 @@ void Server::process_connect(std::shared_ptr<proto::ConnectMessage> msg) {
     }
     users_mutex.unlock();
 
-    if (!found) {
+    if (!found || password_match) {
         proto::ConnectResponse(proto::SUCCESS).send(*client);
     } else if (!password_match) {
         proto::ConnectResponse(proto::WRONG_PASSWORD).send(*client);
         return;
-    } else {
-        proto::ConnectResponse(proto::SUCCESS).send(*client);
     }
 
     std::cout << "Client " << msg->login << " connected\n";
@@ -192,7 +191,10 @@ void Server::process_ls(std::shared_ptr<proto::LsMessage> msg) {
 }
 
 void Server::process_del(std::shared_ptr<proto::DelMessage> msg) {
-    fs::remove(msg->filename);
+    auto file = current_directory / msg->filename;
+
+    LOG(DEBUG) << "Removing file " << file;
+    fs::remove(file);
     proto::DelResponse(proto::SUCCESS).send(*client);
 }
 
@@ -206,6 +208,7 @@ void Server::set_root_directory(const fs::path &root_dir) {
 }
 
 Server::~Server() {
+    LOG(DEBUG) << "Removing Server instance";
     users_mutex.lock();
     for (auto &user : users) {
         if (user.login == login) {
@@ -246,6 +249,12 @@ void Server::process_pwd(std::shared_ptr<proto::PwdMessage> msg) {
 
     proto::PwdResponse(proto::SUCCESS, abs.string()).send(*client);
 }
+
+void Server::process_disconnect(std::shared_ptr<proto::DisconnectMessage> msg) {
+    pthread_exit(nullptr);
+}
+
+
 
 
 

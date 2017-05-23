@@ -10,14 +10,15 @@
 #include <chrono>
 #include <memory>
 #include <netinet/ip.h>
+#include <map>
 #include "stream_socket.h"
 #include "persistence.h"
 
-void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender, sockaddr &actual_sender);
-void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender);
 int read_some(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender);
 int write_some(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa);
-void write_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa);
+
+class au_stream_server_socket;
+class au_stream_client_socket;
 
 struct __attribute__ ((packed)) TransportHeader {
     enum MessageType : uint8_t {
@@ -27,6 +28,17 @@ struct __attribute__ ((packed)) TransportHeader {
         CONNECT_ACK = 3,
         UNKNOWN = 255
     };
+
+    static std::string type_to_string(MessageType t) {
+        switch (t) {
+
+            case REGULAR: return "REGULAR";
+            case ACK: return "ACK";
+            case CONNECT: return "CONNECT";
+            case CONNECT_ACK: return "CONNECT_ACK";
+            default: return "UNKNOWN";
+        }
+    }
 
     uint16_t source_port;
     uint16_t dest_port;
@@ -46,7 +58,7 @@ struct __attribute__ ((packed)) TransportHeader {
 
     std::vector<uint8_t> serialize() const;
 
-    bool validate_checksum_separate(const uint8_t *data_without_header);
+    bool validate_checksum_separate(const uint8_t *data_without_header, size_t expected_size);
 
     static uint16_t count_checksum(const uint8_t *data, int size);
 
@@ -67,6 +79,8 @@ struct AckResponse {
     TransportHeader header;
     uint32_t window_size;
 
+    static constexpr size_t serialized_size() { return sizeof(TransportHeader) + sizeof(uint32_t); }
+
     bool checksum_ok = true;
 };
 
@@ -79,7 +93,7 @@ struct TransportDataMessage {
     TransportDataMessage(uint16_t source_port, uint16_t dest_port, uint32_t seq_number,
                          uint32_t size, uint8_t *data);
     TransportDataMessage();
-    TransportDataMessage(TransportHeader &header, uint8_t *data);
+    TransportDataMessage(TransportHeader &header, uint8_t *data, uint32_t data_size);
 
     std::vector<uint8_t> serialize() const {
         auto sh = header.serialize();
@@ -159,7 +173,7 @@ struct ReceiveBuffer {
         ReadableMessage();
         TransportDataMessage msg;
 
-        std::unique_ptr<uint8_t[]> data;
+        uint8_t data[max_segment_body_size];
         int read_offset = -1; //
     };
 
@@ -183,7 +197,7 @@ struct ReceiveBuffer {
         int first_gap = 0;
         int base = 0;
 
-        int free_packets = 0;
+        int free_packets = buffer_size;
     };
 
     ReceiveBuffer();
@@ -221,11 +235,11 @@ public:
     uint16_t get_own_port() const { return own_port; }
     uint16_t get_peer_port() const { return peer_port; }
 protected:
-
+    int read_data(uint8_t *s, size_t size, const sockaddr *expected_sender);
+    bool try_receive_ack();
+    int send_available_segments();
+    bool message_from_this_channel(const TransportHeader &t) const;
     void init();
-    static std::string get_port_file(int port);
-
-    static std::string get_ports_dir();
 
     int socket_fd;
     int port_fd;
@@ -243,10 +257,12 @@ protected:
     void send_ack(int seq_num, int port, int peer_port, int max);
 };
 
-class au_stream_client_socket : virtual public stream_client_socket {
+class au_stream_client_socket : public stream_client_socket {
 public:
     au_stream_client_socket(const char *server_addr, uint16_t port);
-    au_stream_client_socket(const sockaddr &sever_addr, uint16_t port);
+    au_stream_client_socket(const sockaddr &server_addr, uint16_t port);
+    ~au_stream_client_socket();
+
     void connect() override;
     void send(const void *buf, size_t size) override;
     void recv(void *buf, size_t size) override;
@@ -256,6 +272,11 @@ public:
     uint16_t get_own_port() const { return sock.get_own_port(); }
     uint16_t get_peer_port() const { return sock.get_peer_port(); }
 protected:
+    friend class au_stream_server_socket;
+    au_stream_client_socket(const sockaddr &server_addr, uint16_t port, au_stream_server_socket *ss, in_addr_t own_address);
+
+    in_addr_t own_address = 0;
+    au_stream_server_socket* server_socket = nullptr;
     au_stream_socket sock;
 };
 
@@ -263,11 +284,27 @@ protected:
 class au_stream_server_socket : public stream_server_socket {
 public:
     au_stream_server_socket(const char *addr, int port);
+    /**
+     * To enable repeating connect requests from the same client
+     * all the client_sockets, created with this function are stored in
+     * map client_sockets. So it is important that server socket outlives
+     * client sockets.
+     */
     stream_socket* accept_one_client();
     ~au_stream_server_socket();
+
 protected:
+    friend class au_stream_client_socket;
+
+    int read_accept(uint8_t *s, size_t size, sockaddr &actual_sender);
+    void notify_close(au_stream_client_socket *client_sock);
+
     int socket_fd;
+    int port_fd;
     int port;
+
+    std::map<std::pair<int, int>, au_stream_client_socket *> client_sockets;
+    pthread_rwlock_t clients_lock;
 };
 
 #endif //LAB1_AU_SOCKET_H

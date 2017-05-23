@@ -158,6 +158,18 @@ proto::ServerErrorCode Client::pwd(std::string &s) {
     return proto::SUCCESS;
 }
 
+proto::ServerErrorCode Client::disconnect() {
+    if (!is_connected) {
+        return proto::INVALID_OPERATION;
+    }
+
+    proto::DisconnectMessage().send(*sock);
+
+    return proto::SUCCESS;
+}
+
+
+
 
 
 

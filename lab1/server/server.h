@@ -36,7 +36,7 @@ public:
 
 private:
     void process_connect(std::shared_ptr<proto::ConnectMessage> msg);
-    //void process_disconnect(std::shared_ptr<proto::Dis> msg);
+    void process_disconnect(std::shared_ptr<proto::DisconnectMessage> msg);
     void process_cd(std::shared_ptr<proto::CdMessage> msg);
     void process_get(std::shared_ptr<proto::GetMessage> msg);
     void process_put(std::shared_ptr<proto::PutMessage> msg);

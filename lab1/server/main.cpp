@@ -18,6 +18,7 @@ const char *default_ip = "127.0.0.1";
 
 void *process_client(void *stream_socket_void) {
     Server server((stream_socket *)stream_socket_void);
+    LOG(DEBUG) << "Start processing client";
 
     while (true) {
         try {

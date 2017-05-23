@@ -15,6 +15,7 @@ public:
     Client(const char* ip, int port);
     proto::ServerErrorCode connect(const std::string &login, const std::string &password);
     proto::ServerErrorCode ls(std::vector<std::string> &files);
+    proto::ServerErrorCode disconnect();
     proto::ServerErrorCode cd(const std::string &dir);
     proto::ServerErrorCode put(const std::string &file, const std::string &localfile);
     proto::ServerErrorCode get(const std::string &file, const std::string &localfile);

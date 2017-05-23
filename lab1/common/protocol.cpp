@@ -7,6 +7,7 @@
 #include <iostream>
 #include "protocol.h"
 #include "persistence.h"
+#include "../easyloggingpp/src/easylogging++.h"
 
 namespace proto
 {
@@ -30,6 +31,8 @@ std::shared_ptr<ClientMessage> ClientMessage::deserialize(
             return std::shared_ptr<ClientMessage>(new DelMessage(msg));
         case PWD:
             return std::shared_ptr<ClientMessage>(new PwdMessage(msg));
+        case DISCONNECT:
+            return std::shared_ptr<ClientMessage>(new DisconnectMessage(msg));
         default:
             return {};
     }
@@ -41,7 +44,7 @@ std::shared_ptr<ClientMessage> ClientMessage::receive_message(stream_socket *s) 
 
     auto iter = data.cbegin();
     uint64_t len = deserialize_uint64_t(iter);
-
+    LOG(DEBUG) << "Received application message length " << len;
     data.resize(proto::Message::header_length + len);
     s->recv(data.data() + proto::Message::header_length, len);
     proto::LengthPrefixedMessage lpmsg(len, std::move(data));
@@ -451,6 +454,10 @@ uint64_t PwdResponse::evaluate_body_serialized_size() const {
     return sizeof(uint8_t) + sizeof(uint16_t) + cwd.size();
 }
 
+LengthPrefixedMessage DisconnectMessage::serialize() const {
+    auto msg = serialize_header();
+    return LengthPrefixedMessage(msg.second, std::move(msg.first));
+}
 
 }
 

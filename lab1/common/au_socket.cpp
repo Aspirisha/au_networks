@@ -36,7 +36,23 @@ sockaddr init_address(const char *server_addr) {
     }
     return *(sockaddr*)(&serv_addr);
 }
+
+
+std::string get_ports_dir() {
+    std::string home = getenv("HOME");
+
+    return home + "/" + ".ausocketports";
 }
+
+std::string get_port_file(int port) {
+    std::string ports_dir = get_ports_dir();
+
+    return ports_dir + "/" + std::to_string(port);
+}
+}
+
+bool read_exact(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender, int flags = 0);
+
 
 au_stream_socket::au_stream_socket(int socket_fd, const sockaddr &peeraddr, int peer_port, int own_port_) :
         socket_fd(socket_fd), own_port(own_port_), peer_port(peer_port), peer_addr(peeraddr) {
@@ -79,9 +95,54 @@ au_stream_socket::~au_stream_socket() {
     close(port_fd);
 }
 
+bool au_stream_socket::try_receive_ack() {
+    constexpr size_t response_size = AckResponse::serialized_size() + sizeof(ip);
+
+    uint8_t *response = new uint8_t[response_size];
+    if (!read_exact(socket_fd, response, response_size, &peer_addr, MSG_DONTWAIT)) {
+        return false;
+    }
+
+    AckResponse r(response + sizeof(ip));
+    if (!message_from_this_channel(r.header)) {
+        LOG(DEBUG) << "[Ack waiting] Message not from this channel";
+        return false;
+    }
+
+    if (r.checksum_ok) {
+        current_window = r.window_size;
+    }
+
+    return send_buffer.set_acked(r.header.seq_number);
+}
+
+int au_stream_socket::send_available_segments() {
+    auto max_prev_sending_time = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
+    SenderBuffer::AcknowledgeableMsg* msgs[2 * max_segments_num];
+    int ready_for_sending = send_buffer.packets_to_send(current_window, msgs, max_prev_sending_time);
+
+    int actually_sent = 0;
+    for (int i = 0; i < ready_for_sending; i++) {
+        auto &msg = msgs[i]->msg;
+        auto serialized = msg.serialize();
+
+        int wb = write_some(socket_fd, serialized.data(), serialized.size(), peer_addr);
+
+        if (wb == serialized.size()) {
+            if (msgs[i]->state == SenderBuffer::NEW) {
+                msgs[i]->state = SenderBuffer::SENT;
+                LOG(DEBUG) << "Sent " << serialized.size() << " bytes";
+                actually_sent++;
+            }
+            msgs[i]->last_send_timestamp = std::chrono::steady_clock::now();
+        }
+    }
+
+    return actually_sent;
+}
+
 void au_stream_socket::send(const void *buf, size_t size) {
-    size_t denom = max_segment_body_size - sizeof(struct ip);
-    size_t packets = (size + denom - 1) / denom;
+    size_t packets = (size + max_segment_body_size - 1) / max_segment_body_size;
 
     int acked = 0;
     int awaiting_ack = 0;
@@ -93,60 +154,43 @@ void au_stream_socket::send(const void *buf, size_t size) {
     fds.revents = 0;
     fds.events = POLLIN | POLLOUT;
 
-    constexpr size_t response_size = sizeof(AckResponse) + sizeof(ip);
-    constexpr size_t max_responses_bytes = response_size * max_segments_num;
-    uint8_t *response = new uint8_t[max_responses_bytes];
+    uint8_t *ubuf = (uint8_t *) buf;
+
+    LOG(DEBUG) << "Started au_stream_socket::send to send " << size << " bytes";
+    const int time_to_wait = 100;
+
     while (acked < packets) {
         size_t to_write = std::min(size - written_to_sendbuffer, max_segment_body_size);
-        while (current_window > awaiting_ack && written_to_sendbuffer < size && send_buffer.write(
-                (uint8_t *) buf, to_write, own_port, peer_port)) {
+        while (written_to_sendbuffer < size && send_buffer.write(
+                ubuf, to_write, own_port, peer_port)) {
             written_to_sendbuffer += to_write;
+            ubuf += to_write;
+
+            to_write = std::min(size - written_to_sendbuffer, max_segment_body_size);
         }
-        int ret = poll(&fds, 1, 100);
+        int ret = poll(&fds, 1, time_to_wait);
         if (ret == -1) {
             throw std::logic_error("Polling error");
         } else if (ret == 0) { // timeout
-
+            LOG(DEBUG) << "Timed out";
         } else {
             int largest_acked = 0;
-            if (awaiting_ack > 0 && (fds.revents & POLLIN)) {
-                int max_read = std::min(awaiting_ack * response_size, max_responses_bytes);
+            if ((current_window == 0 || awaiting_ack > 0) && (fds.revents & POLLIN)) {
+                int max_acks = std::max(1, awaiting_ack);
+                for (int i = 0; i < max_acks; i++) {
+                    bool received_ack = try_receive_ack();
 
-                int read_bytes = read_some(socket_fd, response, max_read, &peer_addr);
-                int full_responses = read_bytes / response_size;
-
-                for (int i = 0; i < full_responses; i++) {
-                    AckResponse r(response + i * response_size + sizeof(ip));
-                    if (r.checksum_ok && send_buffer.set_acked(r.header.seq_number)) {
+                    if (received_ack) {
                         acked++;
                         awaiting_ack--;
                         LOG(DEBUG) << "Received ack. Now waiting for " << awaiting_ack << " acks";
-                        if (r.header.seq_number > largest_acked) {
-                            largest_acked = r.header.seq_number;
-                            current_window = r.window_size;
-                        }
                     }
                 }
             }
 
             if (fds.revents & POLLOUT) {
-                auto max_prev_sending_time = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
-                SenderBuffer::AcknowledgeableMsg* msgs[2 * max_segments_num];
-                int ready_for_sending = send_buffer.packets_to_send(current_window, msgs, max_prev_sending_time);
-
-                for (int i = 0; i < ready_for_sending; i++) {
-                    auto &msg = msgs[i]->msg;
-                    auto serialized = msg.serialize();
-
-                    write_fully(socket_fd, serialized.data(), serialized.size(), peer_addr);
-
-                    if (msgs[i]->state == SenderBuffer::NEW) {
-                        msgs[i]->state = SenderBuffer::SENT;
-                        awaiting_ack++;
-                        LOG(DEBUG) << "Now waiting for " << awaiting_ack << " acks";
-                    }
-                    msgs[i]->last_send_timestamp = std::chrono::steady_clock::now();
-                }
+                awaiting_ack += send_available_segments();
+                LOG(DEBUG) << "Now waiting for " << awaiting_ack << " acks";
             }
 
             fds.revents = 0;
@@ -154,27 +198,27 @@ void au_stream_socket::send(const void *buf, size_t size) {
     }
 }
 
-std::string au_stream_socket::get_ports_dir() {
-    std::string home = getenv("HOME");
-
-    return home + "/" + ".ausocketports";
-}
-
-std::string au_stream_socket::get_port_file(int port) {
-    std::string ports_dir = get_ports_dir();
-
-    return ports_dir + "/" + std::to_string(port);
-}
 
 void au_stream_socket::recv(void *buf, size_t size) {
     struct pollfd fds;
     fds.fd = socket_fd;
     fds.revents = 0;
-    fds.events = POLLIN | POLLOUT;
+    fds.events = POLLIN;
 
     uint8_t *ubuf = (uint8_t *) buf;
-    while (size > 0) {
-        int ret = poll(&fds, 1, 1000);
+    LOG(DEBUG) << "Started au_stream_socket::recv to read " << size << " bytes";
+    while (true) {
+        int rb = recv_buffer.read(ubuf, size);
+
+        size -= rb;
+        ubuf += rb;
+
+        if (size == 0) {
+            LOG(DEBUG) << "read fully, and there are still "  << recv_buffer.ready_to_read() << " bytes in buffer";
+            break;
+        }
+
+        int ret = poll(&fds, 1, -1);
         if (ret == -1) {
             throw std::logic_error("Polling error");
         } else if (ret == 0) { // timeout
@@ -182,51 +226,56 @@ void au_stream_socket::recv(void *buf, size_t size) {
         } else {
             if (fds.revents & POLLIN) {
                 int max_packets_to_receive = recv_buffer.get_free_space();
+                LOG(DEBUG) << "Can receive up to " << max_packets_to_receive << " packets";
+
                 for (int i = 0; i < max_packets_to_receive && recv_buffer.ready_to_read() < size; i++) {
+
+                    int to_read = headers_size + std::min(size - recv_buffer.ready_to_read(), max_segment_body_size);
                     uint8_t pack[max_ip_packet];
-                    read_fully(socket_fd, pack, max_ip_packet, &peer_addr);
+                    LOG(DEBUG) << "Trying to read " << to_read << " bytes";
+                    int actually_read = read_data(pack, max_ip_packet, &peer_addr);
 
                     TransportHeader th(pack + sizeof(ip));
-                    TransportDataMessage tdm(th, pack + headers_size);
+
+                    if (!message_from_this_channel(th)) {
+                        continue;
+                    }
+
+                    TransportDataMessage tdm(th, pack + headers_size, actually_read - headers_size);
+                    LOG(DEBUG) << "Received header of type " << TransportHeader::type_to_string(th.type);
+                    LOG(DEBUG) << "Size written in header is " << th.size << " and actual is " << actually_read - headers_size;
                     if (tdm.checksum_ok) {
-                        recv_buffer.put_message(tdm);
-                        send_ack(th.seq_number, own_port, peer_port, std::max(1, max_packets_to_receive - i - 1));
+                        LOG(DEBUG) << "Received message with seq num " << th.seq_number;
+                        if (recv_buffer.put_message(tdm)) {
+                            send_ack(th.seq_number, own_port, peer_port, recv_buffer.get_free_space());
+
+                            LOG(DEBUG) << "Now ready to read " <<
+                            recv_buffer.ready_to_read();
+                        } else {
+                            LOG(DEBUG) << "Failed to put message into receiver buffer";
+                        }
                     }
                 }
             }
 
-            int rb = recv_buffer.read(ubuf, size);
-
-            size -= rb;
-            ubuf += rb;
             fds.revents = 0;
         }
     }
 }
 
-void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender, sockaddr &actual_sender) {
-    while (size > 0) {
-        socklen_t slen = sizeof(sockaddr);
+int au_stream_server_socket::read_accept(uint8_t *s, size_t size, sockaddr &actual_sender) {
+    socklen_t slen = sizeof(sockaddr);
 
-        int rb = recvfrom(socket_fd, s, size, 0, &actual_sender, &slen);
-        if (expected_sender) {
-            sockaddr_in *es = (sockaddr_in *) expected_sender;
-            sockaddr_in *as = (sockaddr_in *) &actual_sender;
-            if (es->sin_addr.s_addr != as->sin_addr.s_addr) continue;
-        } else {
-            expected_sender = &actual_sender; // restrict from now on
-        }
+    int rb = recvfrom(socket_fd, s, size, 0, &actual_sender, &slen);
 
-        if (rb < 0) {
-            throw std::logic_error("Peer closed connection");
-        }
-
-        size -= rb;
-        s += rb;
+    if (rb < 0) {
+        throw std::logic_error("Peer closed connection");
     }
+
+    return rb;
 }
 
-int read_some(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender) {
+int au_stream_socket::read_data(uint8_t *s, size_t size, const sockaddr *expected_sender) {
     sockaddr actual_sender;
     socklen_t slen = sizeof(sockaddr);
     int rb = recvfrom(socket_fd, s, size, 0, &actual_sender, &slen);
@@ -242,16 +291,30 @@ int read_some(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_s
     return rb;
 }
 
-void read_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender) {
-    sockaddr dummy;
-    read_fully(socket_fd, s, size, expected_sender, dummy);
+bool read_exact(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender, int flags) {
+    sockaddr actual_sender;
+    socklen_t slen = sizeof(sockaddr);
+    int rb = recvfrom(socket_fd, s, size, MSG_TRUNC | flags, &actual_sender, &slen);
+    if (rb != size) return false;
+
+    if (expected_sender) {
+        sockaddr_in *es = (sockaddr_in *) expected_sender;
+        sockaddr_in *as = (sockaddr_in *) &actual_sender;
+        if (es->sin_addr.s_addr != as->sin_addr.s_addr) return false;
+    }
+    if (rb < 0) { // hoho
+        throw std::logic_error("Peer closed connection");
+    }
+
+    return true;
 }
+
 
 void au_stream_socket::send_ack(int seq_num, int port, int peer_port, int window_size) {
     AckResponse response(port, peer_port, seq_num, window_size);
     auto s = response.serialize();
 
-    write_fully(socket_fd, s.data(), s.size(), peer_addr);
+    write_some(socket_fd, s.data(), s.size(), peer_addr);
 }
 
 void au_stream_socket::connect() {
@@ -263,17 +326,20 @@ void au_stream_socket::connect() {
     if (sendto(socket_fd, s.data(), s.size(), 0, &peer_addr, sizeof(struct sockaddr)) < 0)  {
         printf("sendto() failed!\n");
         LOG(ERROR) << strerror(errno);
+    } else {
+        LOG(DEBUG) << "Sent connect request";
     }
 
     uint8_t response[headers_size];
+    while (true) {
+        if (!read_exact(socket_fd, response, headers_size, &peer_addr)) {
+            continue;
+        }
 
-    int max_tries = 100;
-    for (int i = 0; i < max_tries; i++) {
-        read_fully(socket_fd, response, headers_size, &peer_addr);
+        TransportHeader r(response + sizeof(ip));
 
-        TransportHeader r(response);
-
-        if (r.validate_checksum_separate(nullptr) && r.dest_port == own_port) {
+        LOG(DEBUG) << "Recieved packet of type: " << TransportHeader::type_to_string(r.type);
+        if (r.validate_checksum_separate(nullptr, 0) && r.dest_port == own_port && r.type == TransportHeader::CONNECT_ACK) {
             peer_port = r.source_port;
             LOG(DEBUG) << "Transport-level connection finished";
             return;
@@ -284,21 +350,12 @@ void au_stream_socket::connect() {
 }
 
 void au_stream_socket::send_unreliable(const void *buf, size_t size) {
-    write_fully(socket_fd, (uint8_t *) buf, size, peer_addr);
+    write_some(socket_fd, (uint8_t *) buf, size, peer_addr);
 }
 
-
-void write_fully(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa) {
-    while (size > 0) {
-        int wb = sendto(socket_fd, s, size, 0, &sa, sizeof(sockaddr));
-
-        if (wb < 0) {
-            throw std::logic_error("Peer closed connection");
-        }
-
-        size -= wb;
-        s += wb;
-    }
+bool au_stream_socket::message_from_this_channel(
+        const TransportHeader &t) const {
+    return t.dest_port == own_port && t.source_port == peer_port;
 }
 
 int write_some(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa) {
@@ -317,10 +374,13 @@ int ReceiveBuffer::ReadBuffer::read(uint8_t *s, uint32_t size) {
         uint32_t packet_size = packets[read_index].msg.header.size - packets[read_index].read_offset;
 
         int to_copy = std::min(size - copied, packet_size);
-        memcpy(s, packets[read_index].msg.data + packets[read_index].read_offset, to_copy);
+        memcpy(s, packets[read_index].data + packets[read_index].read_offset, to_copy);
         packets[read_index].read_offset += to_copy;
-        if (packets[read_index].read_offset == packets[read_index].msg.header.size) read_index++;
+        if (packets[read_index].read_offset == packets[read_index].msg.header.size) {
+            read_index++;
+        }
         copied += to_copy;
+        s += to_copy;
         ready_to_read -= to_copy;
     }
     return copied;
@@ -330,17 +390,18 @@ bool ReceiveBuffer::ReadBuffer::put_message(const TransportDataMessage &msg) {
     if (msg.header.seq_number < base || msg.header.seq_number >= base + buffer_size) return false;
 
     int id = msg.header.seq_number - base;
+
     if (packets[id].read_offset != -1) return false;
 
     packets[id].read_offset = 0;
     packets[id].msg.header = msg.header;
-    memcpy(packets[id].data.get(), msg.data, msg.header.size);
+    memcpy(packets[id].data, msg.data, msg.header.size);
 
     free_packets--;
 
     while (first_gap < buffer_size && packets[first_gap].read_offset != -1) {
-        first_gap++;
         ready_to_read += packets[first_gap].msg.header.size;
+        first_gap++;
     }
     return true;
 }
@@ -357,16 +418,12 @@ void ReceiveBuffer::ReadBuffer::clear(uint32_t new_base) {
 
 
 int ReceiveBuffer::read(uint8_t *s, uint32_t size) {
-    int total_read = 0;
+    int total_read = buf[cur].read(s, size);
 
-    for (int i = 0; i < 2; i++) {
-        int rb = buf[cur].read(s + total_read, size - total_read);
-        if (buf[cur].get_read_index() == ReadBuffer::buffer_size) {
-            std::swap(cur, next);
-            buf[next].clear(buf[cur].get_base() + max_segments_num);
-        }
-
-        total_read += rb;
+    if (buf[cur].get_read_index() == ReadBuffer::buffer_size) {
+        std::swap(cur, next);
+        buf[next].clear(buf[cur].get_base() + max_segments_num);
+        total_read += buf[cur].read(s + total_read, size - total_read);
     }
 
     return total_read;
@@ -460,12 +517,11 @@ void SenderBuffer::AckBuffer::push_message(uint8_t *msg, uint32_t sz,
                                            uint16_t dest_port,
                                            uint16_t src_port) {
     packets[size].state = NEW;
-    packets[size].msg.data = msg;
+    packets[size].msg.data = msg; // TODO this is safe (not to copy data) since we send everything in a blocking mode
     packets[size].msg.header.size = sz;
     packets[size].msg.header.dest_port = dest_port;
     packets[size].msg.header.source_port = src_port;
-    packets[size].msg.header.seq_number = size == 0 ? base :
-                                          packets[size - 1].msg.header.seq_number + sz;
+    packets[size].msg.header.seq_number = base + size;
     packets[size].msg.header.type = TransportHeader::REGULAR;
     packets[size].msg.header.count_checksum_separate(msg, sz);
     size++;
@@ -496,8 +552,11 @@ std::vector<uint8_t> TransportHeader::serialize() const {
 }
 
 bool TransportHeader::validate_checksum_separate(
-        const uint8_t *data_without_header) {
+        const uint8_t *data_without_header, size_t expected_size) {
     uint16_t prev_checksum = checksum;
+
+    if (size != expected_size) return false;
+
     count_checksum_separate(data_without_header, size);
 
     return checksum == prev_checksum;
@@ -546,9 +605,9 @@ TransportDataMessage::TransportDataMessage(uint16_t source_port, uint16_t dest_p
 
 TransportDataMessage::TransportDataMessage() : data(nullptr) {}
 
-TransportDataMessage::TransportDataMessage(TransportHeader &header, uint8_t *data)
+TransportDataMessage::TransportDataMessage(TransportHeader &header, uint8_t *data, uint32_t data_size)
         : header(header), data(data) {
-    checksum_ok = header.validate_checksum_separate(data);
+    checksum_ok = header.validate_checksum_separate(data, data_size) && header.type == TransportHeader::REGULAR;
 }
 
 AckResponse::AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t window_size)
@@ -561,7 +620,7 @@ AckResponse::AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_
 
 AckResponse::AckResponse(const uint8_t *s) : header(s) {
     s += sizeof(TransportHeader);
-    checksum_ok = header.validate_checksum_separate(s) && header.type == TransportHeader::ACK;
+    checksum_ok = header.validate_checksum_separate(s, sizeof(uint32_t)) && header.type == TransportHeader::ACK;
 
     window_size = deserialize_uint32_t(s);
 }
@@ -598,17 +657,15 @@ int ReceiveBuffer::ReadBuffer::get_read_index() const {
 }
 
 ReceiveBuffer::ReadableMessage::ReadableMessage() {
-    data.reset(new uint8_t[max_segment_body_size]);
-
-    msg.data = data.get();
+    msg.data = data;
 }
 
 ReceiveBuffer::ReceiveBuffer() {
     buf[1].set_base(max_segments_num);
 }
 
-au_stream_client_socket::au_stream_client_socket(const sockaddr &peer_addr, uint16_t port) :
-        sock(socket(AF_INET, SOCK_RAW, PROTOCOL_ID), peer_addr, port) { }
+au_stream_client_socket::au_stream_client_socket(const sockaddr &server_addr, uint16_t port) :
+        sock(socket(AF_INET, SOCK_RAW, PROTOCOL_ID), server_addr, port) { }
 
 au_stream_client_socket::au_stream_client_socket(const char *server_addr,
                                                  uint16_t port) :
@@ -631,9 +688,24 @@ void au_stream_client_socket::send_unreliable(const void *buf, size_t size) {
     sock.send_unreliable(buf, size);
 }
 
+au_stream_client_socket::au_stream_client_socket(const sockaddr &server_addr,
+                                                 uint16_t port,
+                                                 au_stream_server_socket *ss, in_addr_t addr) :
+        au_stream_client_socket(server_addr, port) {
+    server_socket = ss;
+    own_address = addr;
+}
+
+au_stream_client_socket::~au_stream_client_socket() {
+    if (server_socket) {
+        server_socket->notify_close(this);
+    }
+}
+
 
 au_stream_server_socket::au_stream_server_socket(const char *addr, int port) : port(port) {
     socket_fd = socket(AF_INET, SOCK_RAW, PROTOCOL_ID);
+    pthread_rwlock_init(&clients_lock, NULL);
 
    // const char *device = "eth0";
     //int status = setsockopt(socket_fd, SOL_SOCKET, SO_BINDTODEVICE, device, strlen(device));
@@ -642,52 +714,79 @@ au_stream_server_socket::au_stream_server_socket(const char *addr, int port) : p
         throw std::logic_error("Error creating socket");
     }
 
+    port_fd = open(get_port_file(port).c_str(), O_CREAT | O_EXCL | O_RDONLY, 0644);
+    if (port_fd == -1) {
+        throw std::logic_error("Port " + std::to_string(port) + " already in use");
+    }
 }
 
 stream_socket *au_stream_server_socket::accept_one_client() {
     while (true) {
-        uint8_t hdr[sizeof(ip) + sizeof(TransportHeader)];
+
+        uint8_t hdr[headers_size] = {0};
         sockaddr sender;
-        read_fully(socket_fd, hdr, sizeof(ip) + sizeof(TransportHeader), nullptr, sender);
 
-        ip *p = (ip *) hdr;
+        while (headers_size != read_accept(hdr, headers_size, sender));
 
-        char addr[30];
-
-        inet_ntop(AF_INET, &p->ip_src, addr, 25);
-        LOG(DEBUG) << "ip->v = " << p->ip_v;
-        LOG(DEBUG) << "ip->tos = " << p->ip_tos;
-        LOG(DEBUG) << "ip->src = " << addr;
-        LOG(DEBUG) << "ip->hl = " << p->ip_hl;
         TransportHeader header(hdr + sizeof(ip));
 
-        LOG(DEBUG) << "header port" << header.dest_port;
-        LOG(DEBUG) << "header type" << header.type;
-        if (!header.validate_checksum_separate(nullptr)) {
-            LOG(DEBUG) << "Checksum is wrong";
+        if (header.type != TransportHeader::CONNECT ||
+            header.dest_port != port) {
             continue;
         }
 
-        if (header.type != TransportHeader::CONNECT) {
+        if (!header.validate_checksum_separate(nullptr, 0)) {
+            LOG(DEBUG) << "Connect: checksum is wrong";
             continue;
         }
 
-        au_stream_client_socket *sock = new au_stream_client_socket(sender, header.source_port);
+        sockaddr_in *sa = (sockaddr_in *) &sender;
+        uint16_t port = header.source_port;
+        std::pair<in_addr_t, uint16_t> key(sa->sin_addr.s_addr, port);
 
-        TransportHeader response(sock->get_own_port(), sock->get_peer_port(), 0, 0, TransportHeader::CONNECT_ACK);
+        pthread_rwlock_rdlock(&clients_lock);
+        auto already_connected = client_sockets.find(key);
+        bool contains = already_connected != client_sockets.end();
+        pthread_rwlock_unlock(&clients_lock);
+
+        au_stream_client_socket *sock = nullptr;
+        if (!contains) {
+            LOG(DEBUG) << "Creating new client socket";
+            sock = new au_stream_client_socket(sender, header.source_port, this,
+                                               sa->sin_addr.s_addr);
+            int rc = pthread_rwlock_wrlock(&clients_lock);
+            client_sockets.insert({key, sock});
+            pthread_rwlock_unlock(&clients_lock);
+        } else {
+            sock = already_connected->second;
+        }
+
+        TransportHeader response(sock->get_own_port(), sock->get_peer_port(), 0,
+                                 0, TransportHeader::CONNECT_ACK);
         response.count_checksum_separate(nullptr, 0);
 
         auto s = response.serialize();
         sock->send_unreliable(s.data(), s.size());
         return sock;
     }
-
-    return nullptr;
 }
 
 au_stream_server_socket::~au_stream_server_socket() {
-
+    pthread_rwlock_destroy(&clients_lock);
 }
+
+void au_stream_server_socket::notify_close(
+        au_stream_client_socket *client_sock) {
+
+    LOG(DEBUG) << "au_stream_server_socket::notify_close";
+    std::pair<in_addr_t, uint16_t> key(client_sock->own_address, client_sock->get_own_port());
+
+    pthread_rwlock_wrlock(&clients_lock);
+    client_sockets.erase(key);
+    pthread_rwlock_unlock(&clients_lock);
+}
+
+
 
 
 
