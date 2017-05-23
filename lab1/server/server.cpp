@@ -125,7 +125,7 @@ void Server::process_cd(std::shared_ptr<proto::CdMessage> msg) {
     }
 
     const std::string &user_root = user_root_directory.string();
-    if (dest.string().compare(0, user_root.size(), user_root)) {
+    if (dest.string().compare(0, user_root.size(), user_root) || !fs::is_directory(dest)) {
         dest = "/"/relative_to(user_root_directory, current_directory);
         proto::CdResponse(proto::INVALID_OPERATION, dest.string()).send(*client);
         return;
@@ -138,9 +138,15 @@ void Server::process_cd(std::shared_ptr<proto::CdMessage> msg) {
 }
 
 void Server::process_get(std::shared_ptr<proto::GetMessage> msg) {
-    fs::path realpath = current_directory/msg->src_file;
+    if (msg->src_file.empty()) {
+        proto::GetResponse(proto::FILE_NOT_FOUND, {}).send(*client);
+        return;
+    }
 
-    if (!fs::exists(realpath)) {
+    fs::path realpath = msg->src_file[0] == '/' ? root_directory / msg->src_file
+                                                : current_directory / msg->src_file;
+
+    if (!fs::exists(realpath) || !fs::is_regular_file(realpath)) {
         LOG(INFO) << "client " << login << " tries to get unexistent file " << realpath.string();
         proto::GetResponse(proto::FILE_NOT_FOUND, {}).send(*client);
         return;
