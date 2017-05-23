@@ -14,7 +14,6 @@
 #include "stream_socket.h"
 #include "persistence.h"
 
-int read_some(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected_sender);
 int write_some(int socket_fd, uint8_t *s, size_t size, const sockaddr &sa);
 
 class au_stream_server_socket;
@@ -46,13 +45,16 @@ struct __attribute__ ((packed)) TransportHeader {
     uint16_t checksum;   /* Checksum for the header AND the message which accompany it; should be evaluated with checksum field = 0*/
     uint32_t size;   // actual message body size
     MessageType type;
+    int64_t timestamp;
 
     TransportHeader() : type(UNKNOWN) {}
 
     TransportHeader(uint16_t source_port, uint16_t dest_port, uint32_t seq_number,
                     uint32_t size, MessageType type) :
         source_port(source_port), dest_port(dest_port), seq_number(seq_number),
-        checksum(0), size(size), type(type) { }
+        checksum(0), size(size), type(type) {
+        timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    }
 
     TransportHeader(const uint8_t *s);
 
@@ -70,7 +72,8 @@ struct __attribute__ ((packed)) TransportHeader {
 };
 
 struct AckResponse {
-    AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t window_size);
+    AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_number,
+                uint32_t window_size, uint64_t request_timestamp);
 
     AckResponse(const uint8_t *s);
 
@@ -254,7 +257,7 @@ protected:
     static const int max_port = 65535;
     static const int receive_buffer_size = 65535;
 
-    void send_ack(int seq_num, int port, int peer_port, int max);
+    void send_ack(int seq_num, int port, int peer_port, int max, uint64_t request_timestamp);
 };
 
 class au_stream_client_socket : public stream_client_socket {

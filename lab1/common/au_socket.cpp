@@ -247,7 +247,7 @@ void au_stream_socket::recv(void *buf, size_t size) {
                     if (tdm.checksum_ok) {
                         LOG(DEBUG) << "Received message with seq num " << th.seq_number;
                         if (recv_buffer.put_message(tdm)) {
-                            send_ack(th.seq_number, own_port, peer_port, recv_buffer.get_free_space());
+                            send_ack(th.seq_number, own_port, peer_port, recv_buffer.get_free_space(), th.timestamp);
 
                             LOG(DEBUG) << "Now ready to read " <<
                             recv_buffer.ready_to_read();
@@ -310,8 +310,8 @@ bool read_exact(int socket_fd, uint8_t *s, size_t size, const sockaddr *expected
 }
 
 
-void au_stream_socket::send_ack(int seq_num, int port, int peer_port, int window_size) {
-    AckResponse response(port, peer_port, seq_num, window_size);
+void au_stream_socket::send_ack(int seq_num, int port, int peer_port, int window_size, uint64_t request_timestamp) {
+    AckResponse response(port, peer_port, seq_num, window_size, request_timestamp);
     auto s = response.serialize();
 
     write_some(socket_fd, s.data(), s.size(), peer_addr);
@@ -538,6 +538,7 @@ TransportHeader::TransportHeader(const uint8_t *s) {
     checksum = deserialize_uint16_t(iter);
     size = deserialize_uint32_t(iter);
     type = (MessageType) deserialize_uint8_t(iter);
+    timestamp = deserialize_uint64_t(iter);
 }
 
 std::vector<uint8_t> TransportHeader::serialize() const {
@@ -548,6 +549,7 @@ std::vector<uint8_t> TransportHeader::serialize() const {
     serialize_uint16_t(checksum, data);
     serialize_uint32_t(size, data);
     serialize_uint8_t(type, data);
+    serialize_uint64_t(timestamp, data);
     return data;
 }
 
@@ -610,9 +612,11 @@ TransportDataMessage::TransportDataMessage(TransportHeader &header, uint8_t *dat
     checksum_ok = header.validate_checksum_separate(data, data_size) && header.type == TransportHeader::REGULAR;
 }
 
-AckResponse::AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t window_size)
+AckResponse::AckResponse(uint16_t source_port, uint16_t dest_port, uint32_t seq_number,
+                         uint32_t window_size, uint64_t request_timestamp)
         : header(source_port, dest_port, seq_number, sizeof(uint32_t), TransportHeader::MessageType::ACK),
           window_size(window_size) {
+    header.timestamp = request_timestamp;
     std::vector<uint8_t> data = header.serialize();
     serialize_uint32_t(window_size, data);
     header.checksum = TransportHeader::count_checksum(data);
